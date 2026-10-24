@@ -123,8 +123,10 @@ async def check_connection() -> bool:
             if not sender_number:
                 log.error("sms: Twilio connected, but no sender: set TWILIO_NUMBER")
                 return False
-            r = await http.get(f"{base}/IncomingPhoneNumbers.json", params={"PhoneNumber": sender_number})
-            numbers = r.json().get("incoming_phone_numbers", []) if r.status_code == 200 else []
+            # Match locally rather than with ?PhoneNumber=: httpx logs request URLs, and the number must stay masked.
+            r = await http.get(f"{base}/IncomingPhoneNumbers.json", params={"PageSize": 1000})
+            listed = r.json().get("incoming_phone_numbers", []) if r.status_code == 200 else []
+            numbers = [n for n in listed if n.get("phone_number") == sender_number]
             if not numbers:
                 log.error("sms: Twilio connected, but sender %s is not a number on this account",
                           mask_phone(sender_number))
