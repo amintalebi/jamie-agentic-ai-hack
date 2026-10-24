@@ -317,6 +317,9 @@ async def call_session(ctx: JobContext) -> None:
     sip_identity = f"sip-{brief.call_id}"
     wire_events(session, ctx, brief, transcript, state, events, sip_identity)
 
+    # Connect first: RoomOptions(participant_identity=...) reads the local participant inside
+    # session.start, which raises "cannot access local participant before connecting" otherwise.
+    await ctx.connect()
     # Start the session before dialing so nothing the callee says is missed (LiveKit's outbound
     # examples do the same). The agent stays silent until the callee speaks or open_if_silent fires.
     room_opts = room_io.RoomOptions(participant_identity=sip_identity, close_on_disconnect=True) if mode != "console" else room_io.RoomOptions()
