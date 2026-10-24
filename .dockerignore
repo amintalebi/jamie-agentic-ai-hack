@@ -7,5 +7,4 @@
 db/
 docs/
 fixtures/
-**/node_modules
-web/dist
+web/
