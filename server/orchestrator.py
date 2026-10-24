@@ -1,6 +1,6 @@
 """Orchestrator (owner: C): LangChain / LangGraph tool loop over the user's messages.
 
-Uses ChatAnthropic (claude-sonnet-4-5 by default, configurable via ORCHESTRATOR_MODEL)
+Uses ChatAnthropic (claude-sonnet-4-6 by default, configurable via ORCHESTRATOR_MODEL)
 with tools: ask_user, send_message, remember, find_business, place_call.
 Includes a deterministic fallback when ANTHROPIC_API_KEY is not configured so local
 smoke tests and the demo script work out of the box.
