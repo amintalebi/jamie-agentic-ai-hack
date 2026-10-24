@@ -1,7 +1,11 @@
-"""Dashboard login by SMS one-time code, sent with Twilio.
+"""Signup and login by phone number: an SMS one-time code sent with Twilio.
 
-POST /api/auth/otp     {"phone": "+49..."}             texts a 6-digit code
-POST /api/auth/verify  {"phone": "+49...", "code": "..."} returns {"token": ...}
+POST /api/auth/otp     {"phone": "+49..."}             texts a 6-digit code, returns {"retry_after": s}
+POST /api/auth/verify  {"phone": "+49...", "code": "..."} returns {"token", "phone", "new_user"}
+
+The first verified login creates the user (server/users.py) and sends a welcome iMessage via Linq.
+Sending retries Twilio hiccups (network, 429, 5xx). Each resend waits longer (RESEND_COOLDOWNS_S);
+a 429 carries Retry-After so the app can count down.
 
 The token is stateless (HMAC-signed phone + expiry), so it survives restarts as long as
 AUTH_SECRET stays the same. Codes live in memory: a restart only voids codes in flight.
@@ -13,22 +17,24 @@ import hmac
 import logging
 import re
 import secrets
+import asyncio
 import time
 from typing import Protocol
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 from pydantic import BaseModel
 
 from common.masking import mask_phone, mask_text
-from server import settings
+from server import settings, users
 
 log = logging.getLogger("server.auth")
 router = APIRouter(prefix="/api/auth")
 
 CODE_TTL_S = 300
 MAX_ATTEMPTS = 5
-RESEND_COOLDOWN_S = 30
+RESEND_COOLDOWNS_S = (30, 60, 120, 300)  # wait after the 1st, 2nd, 3rd, 4th+ code this hour
+SEND_RETRY_DELAYS_S = (1, 3)              # Twilio retries after a transient failure
 MAX_SENDS_PER_PHONE_PER_HOUR = 5
 TOKEN_TTL_S = 30 * 24 * 3600
 E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
@@ -53,7 +59,9 @@ class FakeSmsSender:
 
 
 class TwilioError(Exception):
-    pass
+    def __init__(self, msg: str, transient: bool = False) -> None:
+        super().__init__(msg)
+        self.transient = transient  # worth retrying: network error, 429 or 5xx
 
 
 class TwilioSmsSender:
@@ -76,7 +84,7 @@ class TwilioSmsSender:
         try:
             r = await self._http.post(self._url, data=data)
         except httpx.HTTPError as exc:
-            raise TwilioError(f"request failed: {exc}") from exc
+            raise TwilioError(f"request failed: {exc}", transient=True) from exc
         if r.status_code >= 400:
             # Twilio errors look like {"code": 21211, "message": "..."}; the message may hold the number.
             try:
@@ -84,7 +92,8 @@ class TwilioSmsSender:
                 detail = f"{err.get('code')} {mask_text(str(err.get('message', '')))}"
             except ValueError:
                 detail = r.text[:200]
-            raise TwilioError(f"HTTP {r.status_code}: {detail}")
+            raise TwilioError(f"HTTP {r.status_code}: {detail}",
+                              transient=r.status_code == 429 or r.status_code >= 500)
         log.info("sent sms to %s (sid %s)", mask_phone(to), r.json().get("sid"))
 
 
@@ -153,9 +162,23 @@ def sender() -> SmsSender:
     return _sender
 
 
+async def send_with_retry(to: str, body: str) -> None:
+    """Send, retrying transient failures. Errors like an invalid number fail at once."""
+    for attempt in range(len(SEND_RETRY_DELAYS_S) + 1):
+        try:
+            await sender().send_sms(to, body)
+            return
+        except TwilioError as exc:
+            if not exc.transient or attempt == len(SEND_RETRY_DELAYS_S):
+                raise
+            delay = SEND_RETRY_DELAYS_S[attempt]
+            log.warning("sms to %s failed (%s), retry %d in %ss", mask_phone(to), exc, attempt + 1, delay)
+            await asyncio.sleep(delay)
+
+
 # --- codes -------------------------------------------------------------------------
 
-_codes: dict[str, dict] = {}        # phone -> {"hash", "expires", "attempts", "sent_at"}
+_codes: dict[str, dict] = {}        # phone -> {"hash", "expires", "attempts", "next_send_at"}
 _sends: dict[str, list[float]] = {}  # phone -> send times in the last hour
 
 
@@ -218,30 +241,48 @@ class VerifyRequest(BaseModel):
     code: str
 
 
+def sms_body(code: str) -> str:
+    """The login SMS. With APP_DOMAIN set, the last line "@host #code" binds the code to the PWA's
+    origin: iOS Safari offers it above the keyboard and Android Chrome fills it via WebOTP."""
+    body = f"Your Jamie login code is {code}. It expires in 5 minutes."
+    domain = settings.APP_DOMAIN.removeprefix("https://").removeprefix("http://").split("/")[0]
+    return f"{body}\n\n@{domain} #{code}" if domain else body
+
+
+def _too_soon(seconds: float, msg: str) -> HTTPException:
+    wait = max(1, int(seconds + 0.999))
+    return HTTPException(429, msg.format(wait=wait), headers={"Retry-After": str(wait)})
+
+
 @router.post("/otp")
 async def request_code(req: OtpRequest) -> dict:
     phone = _norm_phone(req.phone)
     now = time.time()
     prev = _codes.get(phone)
-    if prev and now - prev["sent_at"] < RESEND_COOLDOWN_S:
-        raise HTTPException(429, "Code just sent, wait a few seconds before asking again")
+    if prev and now < prev["next_send_at"]:
+        raise _too_soon(prev["next_send_at"] - now, "Code just sent, you can ask for a new one in {wait} s")
     recent = [t for t in _sends.get(phone, []) if now - t < 3600]
     if len(recent) >= MAX_SENDS_PER_PHONE_PER_HOUR:
-        raise HTTPException(429, "Too many codes for this number, try again later")
+        raise _too_soon(recent[0] + 3600 - now, "Too many codes for this number, try again in {wait} s")
 
     code = f"{secrets.randbelow(1_000_000):06d}"
     try:
-        await sender().send_sms(phone, f"Your Jamie login code is {code}. It expires in 5 minutes.")
+        await send_with_retry(phone, sms_body(code))
     except Exception:
         log.exception("could not send login code to %s", mask_phone(phone))
         raise HTTPException(502, "Could not send the code, try again in a moment")
-    _codes[phone] = {"hash": _hash(phone, code), "expires": now + CODE_TTL_S, "attempts": 0, "sent_at": now}
+    # A failed send starts no cooldown; a successful one waits longer each time this hour.
+    cooldown = RESEND_COOLDOWNS_S[min(len(recent), len(RESEND_COOLDOWNS_S) - 1)]
+    _codes[phone] = {"hash": _hash(phone, code), "expires": now + CODE_TTL_S, "attempts": 0,
+                     "next_send_at": now + cooldown}
     _sends[phone] = recent + [now]
-    return {"sent": True, "expires_in": CODE_TTL_S}
+    log.info("login code sent to %s (send %d this hour, next allowed in %ss)", mask_phone(phone),
+             len(recent) + 1, cooldown)
+    return {"sent": True, "expires_in": CODE_TTL_S, "retry_after": cooldown}
 
 
 @router.post("/verify")
-async def verify_code(req: VerifyRequest) -> dict:
+async def verify_code(req: VerifyRequest, background: BackgroundTasks) -> dict:
     phone = _norm_phone(req.phone)
     entry = _codes.get(phone)
     if not entry or entry["expires"] < time.time():
@@ -254,5 +295,8 @@ async def verify_code(req: VerifyRequest) -> dict:
     if not hmac.compare_digest(entry["hash"], _hash(phone, req.code.strip())):
         raise HTTPException(400, "Wrong code")
     _codes.pop(phone, None)
-    log.info("login ok for %s", mask_phone(phone))
-    return {"token": make_token(phone), "phone": phone}
+    user = await users.login(phone)
+    log.info("%s ok for %s", "signup" if user["new"] else "login", mask_phone(phone))
+    if not user.get("activated_at"):
+        background.add_task(users.activate, phone)  # welcome iMessage, after the response
+    return {"token": make_token(phone), "phone": phone, "new_user": bool(user["new"])}
