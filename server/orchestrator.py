@@ -243,9 +243,9 @@ def _note_poll_answer(user_id: str, text: str) -> None:
 
 
 def _trusted_numbers(user_id: str, facts: dict[str, str], found: set[str]) -> set[str]:
-    """Numbers place_call accepts without a fresh confirmation: allowed list, find_business hits this
-    turn, numbers already in the user's memory, and numbers the user confirmed in a poll."""
-    trusted = set(settings.allowed_call_numbers()) | found | _confirmed_numbers.get(user_id, set())
+    """Numbers place_call accepts without a fresh confirmation: find_business hits this turn,
+    numbers already in the user's memory, and numbers the user confirmed in a poll."""
+    trusted = found | _confirmed_numbers.get(user_id, set())
     for v in facts.values():
         trusted |= _numbers_in(v)
     return trusted

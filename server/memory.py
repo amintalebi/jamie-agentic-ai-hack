@@ -26,6 +26,7 @@ from qdrant_client.models import (
 )
 
 from common.contracts import CallBrief, CallEvent
+from common.safe_mode import safe_mode_number
 from server import settings
 
 log = logging.getLogger("server.memory")
@@ -87,9 +88,9 @@ def _default_facts(user_id: str) -> dict[str, str]:
 
 
 def _seed_businesses() -> list[dict[str, str]]:
-    numbers = sorted(settings.allowed_call_numbers())
-    primary = numbers[0] if numbers else "+490000000000"
-    second = numbers[1] if len(numbers) > 1 else primary
+    # Demo places carry the teammate's number. With SAFE_MODE on every call rings SAFE_MODE_NUMBER anyway;
+    # unset, they have no number and cannot be called.
+    primary = second = safe_mode_number()
     return [
         {
             "name": settings.DEMO_BUSINESS_NAME,
@@ -222,9 +223,9 @@ class QdrantMemoryStore:
             return client
 
     async def _seed_default_businesses(self, client: AsyncQdrantClient) -> None:
-        """Upsert the demo businesses. Skipped when ALLOWED_CALL_NUMBERS has not changed,
+        """Upsert the demo businesses. Skipped when SAFE_MODE_NUMBER has not changed,
         so a remote cluster is not hit on every find_business call."""
-        numbers = tuple(sorted(settings.allowed_call_numbers()))
+        numbers = (safe_mode_number(),)
         if self._seeded_numbers == numbers:
             return
         points = []
@@ -350,7 +351,7 @@ class QdrantMemoryStore:
 
     async def find_business(self, query: str) -> list[dict]:
         client = await self._ensure_ready()
-        # Keep businesses synced with the current ALLOWED_CALL_NUMBERS on each search
+        # Keep businesses synced with the current SAFE_MODE_NUMBER on each search
         await self._seed_default_businesses(client)
 
         records, _ = await client.scroll(

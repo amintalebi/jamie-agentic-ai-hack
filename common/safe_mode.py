@@ -3,8 +3,8 @@ call agent with the job (DialPlan in the dispatch metadata), so the two can neve
 
 Search and everything the user sees work the same in both modes; only the dialled number differs.
 The brief, call history and memory always keep the business's own number.
-SAFE_MODE on (default): a number outside ALLOWED_CALL_NUMBERS is dialled as a stand-in from that list
-  (SAFE_MODE_NUMBER, else the first allowed number), so a teammate plays the restaurant.
+SAFE_MODE on (default): every call rings SAFE_MODE_NUMBER (a teammate playing the restaurant).
+  Unset SAFE_MODE_NUMBER = every call is refused.
 SAFE_MODE off: the restaurant's own number is dialled (valid E.164, no premium-rate or service
   numbers), and the call agent says it is a digital assistant.
 """
@@ -18,7 +18,7 @@ log = logging.getLogger("common.safe_mode")
 # E.164 with at least 8 digits: rules out short codes and emergency numbers like +49112.
 _E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 
-# Premium-rate, paid service and directory prefixes we never dial for real.
+# Premium-rate, paid service and directory prefixes we never dial.
 # TODO(hack): only DE/AT/CH/UK/FR/US/NL covered; extend before calling other countries.
 _BLOCKED_PREFIXES = (
     "+49900", "+49137", "+49138", "+49118", "+49180", "+49190", "+49199", "+49700",  # DE
@@ -54,28 +54,13 @@ def safe_mode() -> bool:
     return os.getenv("SAFE_MODE", "true").strip().lower() not in ("0", "false", "no", "off")
 
 
-def allowed_numbers() -> set[str]:
-    return {normalize(n) for n in os.getenv("ALLOWED_CALL_NUMBERS", "").split(",") if n.strip()}
+def safe_mode_number() -> str:
+    """SAFE_MODE_NUMBER normalised, or "" when unset."""
+    return normalize(os.getenv("SAFE_MODE_NUMBER", ""))
 
 
-def standin_number() -> str:
-    """The allowed number that plays every restaurant in safe mode. Raises NotDialable."""
-    allowed = allowed_numbers()
-    if not allowed:
-        raise NotDialable("safe mode is on and ALLOWED_CALL_NUMBERS is empty")
-    raw = os.getenv("SAFE_MODE_NUMBER", "").strip()
-    if not raw:
-        return sorted(allowed)[0]
-    chosen = normalize(raw)
-    if chosen not in allowed:
-        # Refuse rather than ring some other allowed phone (maybe the user's own).
-        log.error("SAFE_MODE_NUMBER is not in ALLOWED_CALL_NUMBERS, refusing calls until fixed")
-        raise NotDialable("SAFE_MODE_NUMBER is not in ALLOWED_CALL_NUMBERS")
-    return chosen
-
-
-def real_number_problem(number: str) -> str | None:
-    """None if this real number may be dialled, otherwise why not."""
+def number_problem(number: str) -> str | None:
+    """None if this number may be dialled at all, otherwise why not."""
     if not _E164_RE.match(number):
         return "not a valid international phone number"
     if number.startswith(_BLOCKED_PREFIXES):
@@ -84,14 +69,18 @@ def real_number_problem(number: str) -> str | None:
 
 
 def plan_dial(business_number: str) -> DialPlan:
-    """Server side: decide what to dial for this (normalised) business number. Raises NotDialable."""
-    number = normalize(business_number)
-    allowed = allowed_numbers()
-    if number in allowed:
-        return DialPlan(number, real_business=False)
+    """Server side: decide what to dial for this business number. Raises NotDialable."""
     if safe_mode():
-        return DialPlan(standin_number(), real_business=False)
-    problem = real_number_problem(number)
+        standin = safe_mode_number()
+        if not standin:
+            raise NotDialable("safe mode is on but SAFE_MODE_NUMBER is not set")
+        problem = number_problem(standin)
+        if problem:
+            log.error("SAFE_MODE_NUMBER is invalid (%s), refusing calls until fixed", problem)
+            raise NotDialable(f"SAFE_MODE_NUMBER is invalid: {problem}")
+        return DialPlan(standin, real_business=False)
+    number = normalize(business_number)
+    problem = number_problem(number)
     if problem:
         raise NotDialable(problem)
     return DialPlan(number, real_business=True)
@@ -100,8 +89,4 @@ def plan_dial(business_number: str) -> DialPlan:
 def check_plan(plan: DialPlan) -> str | None:
     """Call agent side, right before dialling: None if OK, otherwise why not.
     Follows the server's decision; does not read SAFE_MODE itself."""
-    if plan.real_business:
-        return real_number_problem(plan.dial_number)
-    if plan.dial_number in allowed_numbers():
-        return None
-    return "number is not in the call agent's ALLOWED_CALL_NUMBERS (does it match the server's?)"
+    return number_problem(plan.dial_number)

@@ -14,7 +14,6 @@ line and the request. If the callee stays silent after pickup, we open after CAL
 Env, all read after load_dotenv:
   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_SIP_OUTBOUND_TRUNK_ID
   RESON8_API_KEY, ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID_DE
-  ALLOWED_CALL_NUMBERS       comma-separated E.164; unless the server marks a call as a real business, anything else is refused
   (SAFE_MODE is decided by the server and arrives as dial_number/real_business in the job metadata)
   SERVER_PUBLIC_URL          where CallEvents go; default http://127.0.0.1:8001 (scripts/fake_server.py)
   CALL_LLM_MODEL             see config.py
@@ -111,8 +110,8 @@ def parse_job(ctx: JobContext) -> tuple[CallBrief, str, str | None]:
 
 
 def dial_plan(ctx: JobContext, brief: CallBrief) -> DialPlan:
-    """The server's dial decision from the dispatch metadata (common/safe_mode.py). Old dispatches and
-    dial_test carry none: then dial brief.to_number, which must be an allowed number."""
+    """The server's dial decision from the dispatch metadata (common/safe_mode.py). dial_test carries
+    none: then dial brief.to_number (the operator chose it)."""
     try:
         data = json.loads(ctx.job.metadata or "{}")
     except ValueError:

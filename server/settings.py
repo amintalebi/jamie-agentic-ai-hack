@@ -48,10 +48,6 @@ CALL_EVENTS_SECRET = env("CALL_EVENTS_SECRET")
 LOCAL_SERVER_URL = env("LOCAL_SERVER_URL", "http://127.0.0.1:8000")
 
 
-def allowed_call_numbers() -> set[str]:
-    from common.safe_mode import allowed_numbers  # one parser for server and call agent
-    return allowed_numbers()
-
 
 def demo_users() -> set[str]:
     """Phones (E.164) that may text Ada without signing up, and that get the demo identity

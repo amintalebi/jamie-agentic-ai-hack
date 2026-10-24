@@ -19,7 +19,7 @@ docker compose down -v                 # stop and wipe the DB volume (re-runs db
 Run the server without Docker, from the repo root (no database needed; every adapter defaults to its fake):
 ```
 pip install -r server/requirements.txt
-ALLOWED_CALL_NUMBERS=+4915100001234 uvicorn server.main:app --reload
+SAFE_MODE_NUMBER=+4915100001234 uvicorn server.main:app --reload
 # fake an inbound iMessage; "/call" places the scripted demo call
 curl -XPOST localhost:8000/dev/inbound -H 'content-type: application/json' \
   -d '{"message_id":"m1","user_id":"+4917600005678","text":"/call"}'
@@ -171,7 +171,8 @@ TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
 TWILIO_NUMBER=
 SERVER_PUBLIC_URL=        # ngrok URL, used for Linq webhooks and call events
-ALLOWED_CALL_NUMBERS=     # comma-separated E.164 list; calls to anything else are refused
+SAFE_MODE=true            # default; true = every call rings SAFE_MODE_NUMBER, false = the real number
+SAFE_MODE_NUMBER=         # E.164 of the teammate playing the restaurant
 ```
 
 ## Contracts (do not change without telling the whole team)
@@ -226,7 +227,7 @@ Tools:
 - `ask_user(question: str, options: list[str])`: sends a Linq poll (fallback: numbered text options). Ends the turn; the vote arrives later as a new event.
 - `send_message(text: str)`.
 - `remember(key: str, value: str)`: upsert a user fact.
-- `place_call(brief: CallBrief fields minus call_id)`: with `SAFE_MODE` on, rings a stand-in from `ALLOWED_CALL_NUMBERS` for other numbers; otherwise dispatches the call and returns the call_id.
+- `place_call(brief: CallBrief fields minus call_id)`: with `SAFE_MODE` on, rings `SAFE_MODE_NUMBER` instead; otherwise dispatches the call and returns the call_id.
 - `find_business(query: str)`: for the demo, look up in a small `businesses` table seeded with the teammate "restaurant" numbers. Real search is out of scope.
 
 ### Mid-call questions
@@ -264,6 +265,6 @@ Fallbacks if behind: drop Mem0; drop voice notes (text only); drop mid-call poll
 - Keep it boring: FastAPI, Pydantic, httpx, sqlite3, the official SDKs. No new frameworks. Exception, agreed for the demo: the PWA (`web/`) uses Tailwind v4 and shadcn/ui on top of React and OpenUI; keep new UI on those rather than adding more.
 - Every external call gets a timeout and a log line. No silent failures: on errors, text the user something sensible.
 - Never log full API keys or full phone numbers (mask all but the last 4 digits).
-- Dialling goes through `common/safe_mode.py`. `SAFE_MODE` (server env, default on) only changes where a call goes; search works the same. The server decides a `DialPlan` and sends it in the dispatch metadata (`dial_number`, `real_business`), and the call agent follows it; the brief, history and memory keep the business's own number. On: numbers outside `ALLOWED_CALL_NUMBERS` ring a stand-in from that list (`SAFE_MODE_NUMBER`, which must be in the list, else the first one). Off: the real number is dialled only if the user confirmed it in a poll (checked in `place_call`), premium-rate prefixes are refused, and the call agent always discloses that it is an AI assistant.
+- Dialling goes through `common/safe_mode.py`. `SAFE_MODE` (server env, default on) only changes where a call goes; search works the same. The server decides a `DialPlan` and sends it in the dispatch metadata (`dial_number`, `real_business`), and the call agent follows it; the brief, history and memory keep the business's own number. On: every call rings `SAFE_MODE_NUMBER` (unset or invalid: calls are refused). Off: the real number is dialled only if the user confirmed it in a poll (checked in `place_call`), premium-rate prefixes are refused, and the call agent always discloses that it is an AI assistant.
 - No em dashes in any text the agent sends to users.
 - Small commits, one component per person; do not edit another owner's folder without asking.
