@@ -11,7 +11,9 @@ Uses call_agent.prompts.build_instructions(brief). Tools:
 
 Script format: "B: <business line>", "U: <poll answer>" (queued for the next ask_user),
 "# expect ask_user" / "# expect no ask_user" / "# expect say matches <regex>" (about the
-preceding B: turn), "# expect end_call outcome=success|partial" (whole call),
+preceding B: turn), "# expect end_call outcome=success|partial" and "# expect poll english"
+(whole call; checks the polls as posted, so only translated with --server),
+"# expect confirm at most once" (whole call: the agent's confirmation question appears 0 or 1 times),
 "# brief: <path>" (default brief). Other "#" lines are comments.
 """
 import argparse
@@ -33,7 +35,7 @@ sys.path.insert(0, str(ROOT / "call_agent"))
 from config import call_llm_model  # noqa: E402
 from contracts_local import CallBrief  # noqa: E402  TODO(hack): switch to server.contracts
 from prompts import build_instructions  # noqa: E402
-from tools import Transcript  # noqa: E402
+from tools import Transcript, looks_german  # noqa: E402
 
 TOOLS = [
     {
@@ -91,8 +93,10 @@ class StubTools:
 
     def __init__(self, answers: deque | None = None):
         self.answers = answers
+        self.polls: list[tuple[str, list[str]]] = []  # raw from the model (no translation here)
 
     async def ask_user(self, question: str, options: list[str]) -> str:
+        self.polls.append((question, options))
         if self.answers is None:
             answer = input("USER ANSWER (empty = timeout)> ").strip()
         else:
@@ -113,6 +117,7 @@ class RealTools:
 
         self.events = EventsClient(server, brief.call_id)
         self.impl = CallTools(brief, self.events, transcript)
+        self.polls = self.impl.polls  # as posted to the server, after translation
 
     async def ask_user(self, question: str, options: list[str]) -> str:
         print("  (waiting for answer from server...)")
@@ -137,6 +142,7 @@ class CallLog:
     ttfts: list[float] = field(default_factory=list)
     end_outcome: str | None = None
     ended: bool = False
+    said: list[str] = field(default_factory=list)  # every agent utterance in the call
 
 
 async def run_turn(client, model: str, effort: str, system: str, messages: list,
@@ -166,6 +172,7 @@ async def run_turn(client, model: str, effort: str, system: str, messages: list,
         if said:
             print()
             turn.said.append("".join(said))
+            call.said.append("".join(said))
             transcript.add("agent", "".join(said))
         total = time.perf_counter() - t0
         if ttft is not None:
@@ -219,7 +226,8 @@ def parse_script(path: Path) -> tuple[str | None, list[ScriptTurn], list[str]]:
             brief_path = s.split(":", 1)[1].strip()
         elif s.startswith("# expect "):
             exp = s[len("# expect "):].strip()
-            (call_expects if exp.startswith("end_call") else turns[-1].expects).append(exp)
+            call_level = exp.startswith(("end_call", "poll", "confirm"))
+            (call_expects if call_level else turns[-1].expects).append(exp)
     return brief_path, turns, call_expects
 
 
@@ -237,7 +245,16 @@ def check_turn(exp: str, turn: TurnLog | None) -> tuple[bool, str]:
     return False, f"unknown expectation {exp!r}"
 
 
-def check_call(exp: str, call: CallLog) -> tuple[bool, str]:
+CONFIRM_RE = re.compile(r"passt (das |es )?so|stimmt (das |es )?so|is that right", re.IGNORECASE)
+
+
+def check_call(exp: str, call: CallLog, polls: list[tuple[str, list[str]]]) -> tuple[bool, str]:
+    if exp == "confirm at most once":
+        n = sum(len(CONFIRM_RE.findall(t)) for t in call.said)
+        return n <= 1, f"confirmation questions={n}"
+    if exp == "poll english":
+        german = [p for p in polls if looks_german(*p)]
+        return not german, f"german polls={german}" if german else f"{len(polls)} polls"
     if not call.ended:
         return False, "end_call never called"
     m = re.match(r"end_call(?:\s+outcome=(\S+))?$", exp)
@@ -285,7 +302,7 @@ async def run_script(client, model: str, effort: str, brief: CallBrief, script: 
             ok, why = check_turn(exp, log)
             results.append((f"{t.line[:40]!r}: {exp}", ok, why))
     for exp in call_expects:
-        ok, why = check_call(exp, call)
+        ok, why = check_call(exp, call, tools.polls)
         results.append((exp, ok, why))
 
     print("\n-- results --")

@@ -17,6 +17,7 @@ STT_MODE = env("STT_MODE", "fake")               # fake | scribe
 CALLS_MODE = env("CALLS_MODE", "fake")           # fake | livekit
 DATABASE_URL = env("DATABASE_URL")               # empty = no database (fakes only)
 CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
+DASHBOARD_TOKEN = env("DASHBOARD_TOKEN")             # bearer token for /api/dashboard
 # Where the fake call posts its events. The real call agent uses SERVER_PUBLIC_URL.
 LOCAL_SERVER_URL = env("LOCAL_SERVER_URL", "http://127.0.0.1:8000")
 

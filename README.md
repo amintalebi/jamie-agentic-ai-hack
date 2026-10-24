@@ -59,6 +59,8 @@ docker compose up --build
 curl localhost:8000/health
 ```
 
+The call monitor (an installable PWA) is at `http://localhost:8000/app/#token=<DASHBOARD_TOKEN>`. It shows the call history, the live state of each call, any question waiting on you, the timeline and the transcript.
+
 Full setup, as components land:
 
 1. Copy `.env.example` to `.env` and fill in the keys.
