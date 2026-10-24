@@ -16,7 +16,10 @@ services:
       retries: 15
 
   server:
-    build: ./server
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file: .env   # cp .env.example .env first
     environment:
       DATABASE_URL: postgresql://jamie:jamie@db:5432/jamie
     ports:
