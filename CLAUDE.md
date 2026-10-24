@@ -37,7 +37,7 @@ npm test             # parses and renders the server's sample screens
 npm run fixtures     # regenerate those samples after changing server/dashboard.py
 npm run build        # web/dist (a local `uvicorn` also serves it at :8000/app/ if built)
 ```
-In Docker the PWA is its own image (`web/Dockerfile`: Node build stage, then non-root nginx on 8080 serving precompressed files and proxying `/api/` to `API_URL`). Open `http://localhost:8080/app/` and enter your phone number once; it is kept in localStorage and there is no signup / OTP / auth.
+In Docker the PWA is its own image (`web/Dockerfile`: Node build stage, then non-root nginx on 8080 serving precompressed files and proxying `/api/` to `API_URL`). Open `http://localhost:8080/app/`, enter your phone number and the 6-digit code texted to it (`server/auth.py`, Twilio SMS with `SMS_MODE=twilio`; in fake mode the code is in the server log as `[fake send_sms]`). The session token is kept in localStorage for 30 days and is signed with `AUTH_SECRET`.
 
 There are no Python tests or lint config yet.
 
@@ -104,7 +104,7 @@ Actual layout differs from the sketch above in two ways:
 - `server/` is a package: run it as `server.main:app` from the repo root and import siblings as `from server import calls`. The server Docker build context is the repo root, so the image includes `common/`.
 
 ### Dashboard (call monitoring)
-`server/history.py` records every call and its timeline (Postgres tables `calls` and `call_events`, created at startup; in memory without `DATABASE_URL`). Writes are queued in the background (in order per call, 10 s timeout) and never raise, so a slow or broken database cannot delay or break a live call. Calls still live at startup are closed as lost, and a live call far past its `max_call_seconds` shows as "lost". `server/dashboard.py` turns that history into screens written in OpenUI Lang (https://openui.com), built in code with no LLM, and serves them at `/api/dashboard/*` filtered by the `user` query param (a phone number; no auth). `web/` registers the matching components (`web/src/library.tsx`) and renders them with OpenUI's `<Renderer>`, refreshing every 2 s while a call is live.
+`server/history.py` records every call and its timeline (Postgres tables `calls` and `call_events`, created at startup; in memory without `DATABASE_URL`). Writes are queued in the background (in order per call, 10 s timeout) and never raise, so a slow or broken database cannot delay or break a live call. Calls still live at startup are closed as lost, and a live call far past its `max_call_seconds` shows as "lost". `server/dashboard.py` turns that history into screens written in OpenUI Lang (https://openui.com), built in code with no LLM, and serves them at `/api/dashboard/*` for the phone number in the bearer token from `/api/auth/verify`. `web/` registers the matching components (`web/src/library.tsx`) and renders them with OpenUI's `<Renderer>`, refreshing every 2 s while a call is live.
 
 OpenUI Lang arguments are **positional, in Zod key order**. When you change a component, change the Python call in `dashboard.py` and the schema in `library.tsx` together, then run `npm run fixtures && npm test`. Props the server may send as `null` must be `.optional()` (OpenUI rejects `null` for required props, even `.nullable()` ones).
 
