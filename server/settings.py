@@ -39,7 +39,7 @@ CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
 LINQ_API_KEY = env("LINQ_API_KEY")
 LINQ_WEBHOOK_SECRET = env("LINQ_WEBHOOK_SECRET")     # whsec_...; empty = signatures not checked
 ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY")
-DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY")       # web_search tool; empty = tool reports search unavailable
+DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY")       # search_restaurants tool; empty = search unavailable
 SERVER_PUBLIC_URL = env("SERVER_PUBLIC_URL").rstrip("/")
 # Where the fake call posts its events. The real call agent uses SERVER_PUBLIC_URL.
 LOCAL_SERVER_URL = env("LOCAL_SERVER_URL", "http://127.0.0.1:8000")
