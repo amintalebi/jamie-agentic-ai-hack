@@ -1,7 +1,7 @@
 """Orchestrator (owner: C): LangChain / LangGraph tool loop over the user's messages.
 
 Uses ChatAnthropic (claude-sonnet-4-6 by default, configurable via ORCHESTRATOR_MODEL)
-with tools: ask_user, send_message, remember, find_business, place_call.
+with tools: ask_user, send_message, remember, find_business, web_search, place_call.
 Includes a deterministic fallback when ANTHROPIC_API_KEY is not configured so local
 smoke tests and the demo script work out of the box.
 """
@@ -20,7 +20,7 @@ from typing_extensions import TypedDict
 
 from common.contracts import CallBrief, CallEvent
 from common.masking import mask_phone
-from server import calls, gateway, memory, settings
+from server import calls, gateway, memory, search, settings
 
 log = logging.getLogger("server.orchestrator")
 
@@ -117,6 +117,9 @@ Core behavior:
 - Check the user's known profile facts first instead of asking again.
 - Save any new durable user preference, name, or favorite place using the `remember` tool.
 - When the user mentions a business (like "the usual Italian place" or a restaurant name), resolve its phone number using `find_business` and the user's facts (`usual_italian`, etc.).
+- Use `web_search` for facts you do not know, like a business that `find_business` does not have, its opening
+  hours, address or phone number. Summarize what you found in your own words, briefly. `place_call` refuses numbers that
+  are not on the allowed list; if that happens, tell the user you cannot call that number.
 - Before placing a call with `place_call`, make sure you have all essential details:
   1. Which business and its phone number (via `find_business`).
   2. Date and time.
@@ -164,6 +167,13 @@ class FindBusinessArgs(BaseModel):
     )
 
 
+class WebSearchArgs(BaseModel):
+    query: str = Field(
+        description="Web search query, max 128 characters. Supports operators like site:, \"phrase\", "
+                    "lang:de, after:2026-01-01. E.g. 'Ristorante Roma Berlin Mitte phone number'."
+    )
+
+
 class PlaceCallArgs(BaseModel):
     to_number: str = Field(description="E.164 phone number of the business from find_business.")
     language: Literal["de", "en"] = Field(
@@ -197,7 +207,7 @@ class TurnTracker:
         self.placed_call_id: str | None = None
 
 
-def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) -> list:
+def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker, user_text: str = "") -> list:
     @tool("ask_user", args_schema=AskUserArgs)
     async def ask_user_tool(question: str, options: list[str]) -> str:
         """Send an iMessage poll to ask the user a clarifying question. Ends the current turn."""
@@ -235,6 +245,17 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
     async def find_business_tool(query: str) -> str:
         """Look up businesses by name or kind in the seeded businesses directory."""
         hits = await memory.find_business(query)
+        return json.dumps(hits, ensure_ascii=False)
+
+    @tool("web_search", args_schema=WebSearchArgs)
+    async def web_search_tool(query: str) -> str:
+        """Search the web (DeepSeek Search). Returns the top results with title, url, site, date and summary."""
+        try:
+            hits = await search.web_search(query, count=5, ori_question=user_text)
+        except search.SearchError as e:
+            return f"Web search unavailable: {e}. Do not retry; continue without it."
+        if not hits:
+            return "No results."
         return json.dumps(hits, ensure_ascii=False)
 
     @tool("place_call", args_schema=PlaceCallArgs)
@@ -287,6 +308,7 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
         send_message_tool,
         remember_tool,
         find_business_tool,
+        web_search_tool,
         place_call_tool,
     ]
 
@@ -373,7 +395,7 @@ async def _run_langgraph_turn(user_id: str, text: str) -> None:
     active = calls.active_calls(user_id)
 
     tracker = TurnTracker()
-    tools = _make_turn_tools(user_id, facts, tracker)
+    tools = _make_turn_tools(user_id, facts, tracker, text)
     tools_by_name = {t.name: t for t in tools}
 
     llm = _make_llm(max_tokens=1000, timeout=LLM_TIMEOUT_S)
