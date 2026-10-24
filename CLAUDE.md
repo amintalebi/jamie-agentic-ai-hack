@@ -37,7 +37,7 @@ npm test             # parses and renders the server's sample screens
 npm run fixtures     # regenerate those samples after changing server/dashboard.py
 npm run build        # web/dist (a local `uvicorn` also serves it at :8000/app/ if built)
 ```
-In Docker the PWA is its own image (`web/Dockerfile`: Node build stage, then non-root nginx on 8080 serving precompressed files and proxying `/api/` to `API_URL`). Open `http://localhost:8080/app/`, enter your phone number and the 6-digit code texted to it (`server/auth.py`, Twilio SMS with `SMS_MODE=twilio`; in fake mode the code is in the server log as `[fake send_sms]`). The session token is kept in localStorage for 30 days and is signed with `AUTH_SECRET`.
+In Docker the PWA is its own image (`web/Dockerfile`: Node build stage, then non-root nginx on 8080 serving precompressed files and proxying `/api/` to `API_URL`). Open `http://localhost:8080/app/`, enter your phone number and the 6-digit code texted to it (`server/auth.py`, Twilio SMS with `SMS_MODE=twilio`; in fake mode the code is in the server log as `[fake send_sms]`). Sending retries Twilio hiccups, and each resend this hour waits longer (30/60/120/300 s, max 5 per hour). The SMS ends with `@APP_DOMAIN #code` so iOS and Android autofill it, and the form submits by itself. The first login signs the user up (`server/users.py`, `users` table) and sends a welcome iMessage via Linq; the user counts as activated only once that send succeeds, so it is retried on the next login. The session token is kept in localStorage for 30 days and is signed with `AUTH_SECRET`.
 
 There are no Python tests or lint config yet.
 

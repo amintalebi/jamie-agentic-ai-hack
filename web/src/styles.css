@@ -156,3 +156,6 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .phone .error { margin: 0; font-size: 14px; }
 .phone .row { display: flex; justify-content: space-between; gap: 8px; }
 .phone button.link { background: transparent; color: var(--accent); font-weight: 500; padding: 6px 0; }
+.welcome { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.welcome p { margin: 0; }
+.welcome button.link { background: transparent; border: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
