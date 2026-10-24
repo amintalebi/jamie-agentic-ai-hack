@@ -2,6 +2,7 @@
 import os
 
 from contracts_local import CallBrief  # TODO(hack): switch to server.contracts
+from common.safe_mode import safe_mode  # contracts_local put the repo root on sys.path
 
 # Team decision (24 Oct): no AI disclosure in the opening line by default, because the
 # demo calls our own teammates. DISCLOSE_AI=true restores the CLAUDE.md variant.
@@ -10,6 +11,9 @@ from contracts_local import CallBrief  # TODO(hack): switch to server.contracts
 
 
 def _disclose_ai() -> bool:
+    # Real businesses (SAFE_MODE off) always hear that an assistant is calling.
+    if not safe_mode():
+        return True
     return os.getenv("DISCLOSE_AI", "false").strip().lower() in ("1", "true", "yes")
 
 

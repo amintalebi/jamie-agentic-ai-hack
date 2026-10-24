@@ -2,7 +2,7 @@
 #   docker build -f call_agent/Dockerfile -t jamie-call-agent .
 #   docker run --env-file .env jamie-call-agent
 # Needs the same .env as the server: LIVEKIT_*, LIVEKIT_SIP_OUTBOUND_TRUNK_ID, ELEVENLABS_*, ANTHROPIC_API_KEY,
-# RESON8_API_KEY (optional), SERVER_PUBLIC_URL, ALLOWED_CALL_NUMBERS, CALL_AGENT_NAME.
+# RESON8_API_KEY (optional), SERVER_PUBLIC_URL, ALLOWED_CALL_NUMBERS, SAFE_MODE, CALL_AGENT_NAME.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

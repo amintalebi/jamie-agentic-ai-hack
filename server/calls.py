@@ -17,6 +17,7 @@ from livekit import api as lk_api
 
 from common.contracts import CallBrief, CallEvent
 from common.masking import mask_phone, mask_text
+from common.safe_mode import refusal_reason, safe_mode
 from server import gateway, history, memory, orchestrator, settings
 
 log = logging.getLogger("server.calls")
@@ -26,7 +27,7 @@ MAX_ANSWER_WAIT_S = 60
 
 
 class CallRefused(Exception):
-    """The number is not in ALLOWED_CALL_NUMBERS, or the call could not be dispatched."""
+    """The number may not be dialled (see common/safe_mode.py), or the call could not be dispatched."""
 
 
 class UnknownCall(Exception):
@@ -116,10 +117,13 @@ dispatcher: CallDispatcher = LiveKitDispatcher() if settings.CALLS_MODE == "live
 
 async def place_call(brief: CallBrief) -> str:
     """Dial brief.to_number. Pass call_id="" to get a fresh id. Returns the call_id.
-    Raises CallRefused for numbers outside ALLOWED_CALL_NUMBERS."""
-    if brief.to_number not in settings.allowed_call_numbers():
-        log.warning("refused call to %s: not in ALLOWED_CALL_NUMBERS", mask_phone(brief.to_number))
-        raise CallRefused("number is not on the allowed list")
+    Raises CallRefused for numbers we may not dial (see common/safe_mode.py)."""
+    reason = refusal_reason(brief.to_number)
+    if reason:
+        log.warning("refused call to %s: %s", mask_phone(brief.to_number), reason)
+        raise CallRefused(reason)
+    if not safe_mode():
+        log.warning("SAFE_MODE off: dialling a real number %s", mask_phone(brief.to_number))
     if not brief.call_id:
         brief = brief.model_copy(update={"call_id": uuid.uuid4().hex[:12]})
     _calls[brief.call_id] = CallState(brief=brief)

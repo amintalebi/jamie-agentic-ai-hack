@@ -14,7 +14,8 @@ line and the request. If the callee stays silent after pickup, we open after CAL
 Env, all read after load_dotenv:
   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_SIP_OUTBOUND_TRUNK_ID
   RESON8_API_KEY, ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID_DE
-  ALLOWED_CALL_NUMBERS       comma-separated E.164; anything else is refused before dialing
+  ALLOWED_CALL_NUMBERS       comma-separated E.164; with SAFE_MODE on, anything else is refused before dialing
+  SAFE_MODE                  default true; false = any valid E.164 number (real restaurants), AI disclosure forced on
   SERVER_PUBLIC_URL          where CallEvents go; default http://127.0.0.1:8001 (scripts/fake_server.py)
   CALL_LLM_MODEL             see config.py
   ELEVENLABS_TTS_MODEL       default eleven_v4_turbo
@@ -77,6 +78,7 @@ except ImportError:  # pragma: no cover
 from config import call_llm_model  # noqa: E402
 from contracts_local import CallBrief, CallEvent  # noqa: E402  TODO(hack): switch to server.contracts
 from events import EventsClient, mask_phone  # noqa: E402
+from common.safe_mode import refusal_reason  # noqa: E402  (contracts_local put the repo root on sys.path)
 from prompts import build_instructions, opening_line  # noqa: E402
 from style import strip_tags, style_addendum  # noqa: E402
 from tools import CallTools, Transcript, make_tools  # noqa: E402
@@ -405,9 +407,10 @@ async def call_session(ctx: JobContext) -> None:
 
     trunk_id = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID", "")
     if mode != "console":
-        if brief.to_number not in allowed_numbers():
-            log.error("refused: %s is not in ALLOWED_CALL_NUMBERS", mask_phone(brief.to_number))
-            await post_failed(events, brief, "Refused: the number is not in the allowed list")
+        reason = refusal_reason(brief.to_number)
+        if reason:
+            log.error("refused: %s: %s", mask_phone(brief.to_number), reason)
+            await post_failed(events, brief, f"Refused: {reason}")
             ctx.shutdown("number not allowed")
             return
         if not trunk_id:
