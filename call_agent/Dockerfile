@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r call_agent/requirements.txt livekit-plugins-no
 
 COPY common/ common/
 COPY call_agent/ call_agent/
-COPY fixtures/ fixtures/
+# fixtures/ is only for console mode and is excluded by the root .dockerignore; not copied.
 
 # Plugin model files (ElevenLabs) so the first call does not download them.
 RUN python call_agent/agent.py download-files
