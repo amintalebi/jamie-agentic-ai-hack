@@ -3,9 +3,9 @@ call agent with the job (DialPlan in the dispatch metadata), so the two can neve
 
 Search and everything the user sees work the same in both modes; only the dialled number differs.
 The brief, call history and memory always keep the business's own number.
-SAFE_MODE on (default): every call rings SAFE_MODE_NUMBER (a teammate playing the restaurant).
+SAFE_MODE on (default): every call rings SAFE_MODE_NUMBER (a teammate playing the business).
   Unset SAFE_MODE_NUMBER = every call is refused.
-SAFE_MODE off: the restaurant's own number is dialled (valid E.164, no premium-rate or service
+SAFE_MODE off: the business's own number is dialled (valid E.164, no premium-rate or service
   numbers), and the call agent says it is a digital assistant.
 """
 import logging
