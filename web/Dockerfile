@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Dashboard PWA: build with Node, serve the static files with nginx (non-root, port 8080).
 # Build context is web/:  docker build -t jamie-web ./web
-# /api/ is proxied to API_URL (default http://server:8000, the compose service), so the
+# /api/ is proxied to API_URL (the live backend by default), so the
 # app and its API share one origin: no CORS, and the service worker scope stays /app/.
 
 # --- 1. build -------------------------------------------------------------------
@@ -25,7 +25,7 @@ RUN npm run build \
 # --- 2. serve -------------------------------------------------------------------
 FROM nginxinc/nginx-unprivileged:1.30.6-alpine
 
-ENV API_URL=http://server:8000
+ENV API_URL=https://api.jamie-agentic-hack.app/
 # The image renders templates/*.template into conf.d/ with envsubst at start (only API_URL here).
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /web/dist /usr/share/nginx/html/app
