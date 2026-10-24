@@ -1,0 +1,15 @@
+# 20:30 is inside the allowed 30 min -> accept alone. Callback number -> digit pairs.
+# Then the restaurant notices Sunday is its closing day -> ask about another date, user says No.
+# brief: fixtures/brief_italian.json
+B: Ristorante Roma, guten Tag?
+# expect no ask_user
+B: Um 20 Uhr sind wir voll, aber um 20:30 hätte ich noch einen Tisch für vier drinnen.
+# expect no ask_user
+B: Können Sie mir noch eine Rückrufnummer geben?
+# expect no ask_user
+# expect say matches null eins, fünf eins, null null, null null, null null, null zwei
+B: Oh, Entschuldigung, ich sehe gerade, am Sonntag ist bei uns Ruhetag. Da haben wir gar nicht geöffnet.
+# expect ask_user
+U: No
+B: Schade, tut mir leid. Auf Wiederhören!
+# expect end_call outcome=failed|partial
