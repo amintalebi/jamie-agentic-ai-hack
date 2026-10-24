@@ -1,6 +1,9 @@
 """Voice notes to text (owner: B). Real: ElevenLabs Scribe v2."""
 import logging
+import time
 from typing import Protocol
+
+import httpx
 
 from server import settings
 
@@ -17,10 +20,23 @@ class FakeTranscriber:
 
 
 class ScribeTranscriber:
-    """TODO(B): ElevenLabs speech-to-text, Scribe v2. Verify the model id in ElevenLabs docs."""
+    """ElevenLabs speech-to-text, model `scribe_v2` (checked against the API on 24 Oct 2026).
+    The language is auto-detected, so German, English and Persian voice notes all work."""
+
+    URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
     async def transcribe(self, audio: bytes) -> str:
-        raise NotImplementedError
+        start = time.monotonic()
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(self.URL, headers={"xi-api-key": settings.ELEVENLABS_API_KEY},
+                                  data={"model_id": "scribe_v2"}, files={"file": ("voice-note", audio)})
+        if r.is_error:
+            # TODO(hack): if iMessage .caf audio is ever rejected, convert it with ffmpeg first.
+            raise RuntimeError(f"scribe failed: {r.status_code} {r.text[:200]}")
+        data = r.json()
+        log.info("transcribed %d bytes (%s) in %.0f ms", len(audio), data.get("language_code"),
+                 (time.monotonic() - start) * 1000)
+        return data.get("text", "").strip()
 
 
 transcriber: Transcriber = ScribeTranscriber() if settings.STT_MODE == "scribe" else FakeTranscriber()
