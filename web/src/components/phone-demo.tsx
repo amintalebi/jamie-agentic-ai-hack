@@ -1,7 +1,7 @@
 import { Check, ChevronLeft, Phone, Video } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Logo, LiveDot, Waveform } from "./brand";
+import { Logo, LiveDot, TypingDots, Waveform } from "./brand";
 
 // The demo script, replayed in a loop on the sign-in screen. Each entry is how long to wait
 // before moving to the next step (ms).
@@ -49,12 +49,12 @@ export function PhoneDemo({ className }: { className?: string }) {
 
           {/* conversation header */}
           <div className="flex items-center justify-between border-b border-black/5 px-4 pb-2.5 pt-2 dark:border-white/10">
-            <ChevronLeft className="size-6 text-[#0a84ff]" />
+            <ChevronLeft className="size-6 text-imessage" />
             <div className="flex flex-col items-center gap-0.5">
               <Logo className="size-9" />
               <span className="text-[11px] font-medium">Jamie</span>
             </div>
-            <Video className="size-5 text-[#0a84ff]" />
+            <Video className="size-5 text-imessage" />
           </div>
 
           {/* messages: newest at the bottom, older ones slide up and out */}
@@ -99,7 +99,7 @@ export function PhoneDemo({ className }: { className?: string }) {
 
 function Mine({ children }: { children: React.ReactNode }) {
   return (
-    <div className="bubble-in max-w-[78%] self-end rounded-[18px] rounded-br-[6px] bg-[#0a84ff] px-3 py-2 text-white">{children}</div>
+    <div className="bubble-in max-w-[78%] self-end rounded-[18px] rounded-br-[6px] bg-imessage px-3 py-2 text-white">{children}</div>
   );
 }
 
@@ -114,9 +114,7 @@ function Theirs({ children }: { children: React.ReactNode }) {
 function Typing() {
   return (
     <div className="bubble-in flex w-fit items-center gap-1 self-start rounded-[18px] rounded-bl-[6px] bg-[#e9e9eb] px-3.5 py-3 dark:bg-[#26252a]">
-      {[0, 1, 2].map((i) => (
-        <span key={i} className="typing-dot size-1.5 rounded-full bg-neutral-500" style={{ animationDelay: `${i * 160}ms` }} />
-      ))}
+      <TypingDots className="text-neutral-500" />
     </div>
   );
 }
@@ -134,7 +132,7 @@ function Poll({ question, options, picked }: { question: string; options: string
             key={o}
             className={cn(
               "flex items-center justify-between rounded-xl bg-white px-3 py-2 transition-all duration-300 dark:bg-neutral-900",
-              picked === i && "bg-[#0a84ff] text-white dark:bg-[#0a84ff]",
+              picked === i && "bg-imessage text-white dark:bg-imessage",
             )}
           >
             <span className="font-medium">{o}</span>

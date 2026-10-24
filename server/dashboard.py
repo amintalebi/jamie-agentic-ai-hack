@@ -149,7 +149,8 @@ def call_screen(call: dict) -> tuple[str, bool]:
         p.add("KeyValue", "Allowed alone", "; ".join(brief.get("allowed_decisions", [])) or "nothing"),
         p.add("KeyValue", "Must ask you", "; ".join(brief.get("must_ask_user_for", [])) or "nothing"),
     ]))
-    return p.render("Page", "Call", call["call_id"], children), live
+    # Empty title: the CallHeader card already names this screen.
+    return p.render("Page", "", None, children), live
 
 
 # --- routes --------------------------------------------------------------------

@@ -1,7 +1,10 @@
+import { useId } from "react";
 import { cn } from "@/lib/utils";
 
 /** Jamie's mark: a chat bubble holding a sound wave, on the brand gradient. */
 export function Logo({ className }: { className?: string }) {
+  // One gradient id per instance: duplicate ids break url(#...) when the first copy is hidden.
+  const gid = `jw${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   return (
     <span className={cn("bg-brand inline-grid size-8 place-items-center rounded-[30%] shadow-soft", className)}>
       <svg viewBox="0 0 24 24" className="size-[62%]" fill="none" aria-hidden>
@@ -9,14 +12,14 @@ export function Logo({ className }: { className?: string }) {
           d="M12 3.5c-4.97 0-9 3.36-9 7.5 0 2.2 1.13 4.17 2.94 5.54L5.2 20.2a.5.5 0 0 0 .7.56l3.83-1.83c.73.15 1.49.23 2.27.23 4.97 0 9-3.36 9-7.5S16.97 3.5 12 3.5Z"
           fill="white"
         />
-        <g stroke="url(#jw)" strokeWidth="1.9" strokeLinecap="round">
+        <g stroke={`url(#${gid})`} strokeWidth="1.9" strokeLinecap="round">
           <path d="M8 10v2" />
           <path d="M10.7 8.6v4.8" />
           <path d="M13.4 9.4v3.2" />
           <path d="M16 10.3v1.4" />
         </g>
         <defs>
-          <linearGradient id="jw" x1="7" y1="8" x2="17" y2="14" gradientUnits="userSpaceOnUse">
+          <linearGradient id={gid} x1="7" y1="8" x2="17" y2="14" gradientUnits="userSpaceOnUse">
             <stop stopColor="var(--brand-1)" />
             <stop offset="1" stopColor="var(--brand-3)" />
           </linearGradient>
@@ -36,7 +39,7 @@ export function Wordmark({ className }: { className?: string }) {
 }
 
 /** Soft moving colour blobs behind the page. Purely decorative. */
-export function Aurora({ className, intensity = 1 }: { className?: string; intensity?: number }) {
+export function Aurora({ className, intensity = 1, still = false }: { className?: string; intensity?: number; still?: boolean }) {
   const blobs = [
     { c: "var(--brand-1)", s: "left-[-10%] top-[-15%] size-[55vmax]", d: "0s" },
     { c: "var(--brand-2)", s: "right-[-15%] top-[10%] size-[45vmax]", d: "-6s" },
@@ -47,7 +50,7 @@ export function Aurora({ className, intensity = 1 }: { className?: string; inten
       {blobs.map((b) => (
         <div
           key={b.d}
-          className={cn("aurora-blob absolute rounded-full blur-[90px]", b.s)}
+          className={cn("absolute rounded-full blur-[60px] sm:blur-[90px]", !still && "aurora-blob", b.s)}
           style={{
             background: `radial-gradient(circle at center, ${b.c}, transparent 65%)`,
             opacity: 0.22 * intensity,
@@ -91,6 +94,17 @@ export function Waveform({
             transform: active ? undefined : `scaleY(${0.35 + ((i * 37) % 60) / 100})`,
           }}
         />
+      ))}
+    </span>
+  );
+}
+
+/** Three bouncing dots, like the iMessage typing indicator. */
+export function TypingDots({ className }: { className?: string }) {
+  return (
+    <span aria-hidden className={cn("inline-flex items-center gap-1", className)}>
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="typing-dot size-1.5 rounded-full bg-current" style={{ animationDelay: `${i * 160}ms` }} />
       ))}
     </span>
   );

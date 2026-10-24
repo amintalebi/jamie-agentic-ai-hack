@@ -18,7 +18,7 @@ import {
   ApiError, AuthError, clearPhone, fetchScreen, getPhone, getToken, normalisePhone, readSmsCode, requestCode,
   setPhone, setToken, verifyCode, type Screen,
 } from "./api";
-import { library } from "./library";
+import { library, resetStats } from "./library";
 
 const LIVE_POLL_MS = 2000;
 const IDLE_POLL_MS = 15000;
@@ -57,6 +57,8 @@ export function App() {
     clearPhone();
     setTokenState("");
     setWelcome(false);
+    resetStats();
+    setState({ kind: "loading" }); // never show the previous account's calls to the next login
   }
 
   useEffect(() => {
@@ -118,7 +120,7 @@ export function App() {
 
   return (
     <div className="min-h-dvh">
-      <Aurora intensity={0.55} />
+      <Aurora intensity={0.55} still={state.kind === "ok" && state.screen.live} />
       <header className="glass sticky top-0 z-20 border-b border-border/60 pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
           <a href="#/" aria-label="All calls">
@@ -438,6 +440,7 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string, newUser: boolea
         <InputOTP
           maxLength={6}
           pattern={REGEXP_ONLY_DIGITS}
+          pasteTransformer={(s) => s.replace(/\D/g, "")}
           value={code}
           onChange={(v) => setCode(v.replace(/\D/g, "").slice(0, 6))}
           name="one-time-code"

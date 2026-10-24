@@ -259,7 +259,7 @@ When a `result` arrives: send the user a 2 to 3 line summary written by Sonnet f
 Fallbacks if behind: drop Mem0; drop voice notes (text only); drop mid-call polls (agent accepts the closest time within 30 min).
 
 ## Conventions
-- Keep it boring: FastAPI, Pydantic, httpx, sqlite3, the official SDKs. No new frameworks.
+- Keep it boring: FastAPI, Pydantic, httpx, sqlite3, the official SDKs. No new frameworks. Exception, agreed for the demo: the PWA (`web/`) uses Tailwind v4 and shadcn/ui on top of React and OpenUI; keep new UI on those rather than adding more.
 - Every external call gets a timeout and a log line. No silent failures: on errors, text the user something sensible.
 - Never log full API keys or full phone numbers (mask all but the last 4 digits).
 - Only ever dial numbers in `ALLOWED_CALL_NUMBERS`.

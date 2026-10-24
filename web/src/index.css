@@ -39,6 +39,7 @@
   --bad: oklch(0.6 0.21 25);
   --bad-soft: oklch(0.95 0.03 25);
   --bubble-agent: oklch(0.62 0.2 255);
+  --imessage: #0a84ff;
   --shadow-soft: 0 1px 2px oklch(0.2 0.02 300 / 0.04), 0 8px 24px -8px oklch(0.2 0.02 300 / 0.12);
   --shadow-lift: 0 2px 4px oklch(0.2 0.02 300 / 0.05), 0 24px 48px -16px oklch(0.3 0.05 300 / 0.25);
 }
@@ -111,6 +112,7 @@
   --color-bad: var(--bad);
   --color-bad-soft: var(--bad-soft);
   --color-bubble-agent: var(--bubble-agent);
+  --color-imessage: var(--imessage);
   --shadow-soft: var(--shadow-soft);
   --shadow-lift: var(--shadow-lift);
   --animate-caret-blink: caret-blink 1.25s ease-out infinite;
@@ -184,10 +186,11 @@
   background:
     linear-gradient(var(--card), var(--card)) padding-box,
     conic-gradient(from var(--angle), var(--brand-1), var(--brand-2), var(--brand-3), var(--live), var(--brand-1)) border-box;
-  animation: border-spin 4s linear infinite;
 }
+/* Turning version, for the single call header in view (repaints every frame, so use it once per screen). */
+.live-border-spin { animation: border-spin 4s linear infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .aurora-blob, .wave-bar, .ring-out, .typing-dot, .live-border { animation: none; }
+  .aurora-blob, .wave-bar, .ring-out, .typing-dot, .live-border-spin { animation: none; }
   .rise, .bubble-in, .confetti-bit { animation-duration: 1ms; }
 }

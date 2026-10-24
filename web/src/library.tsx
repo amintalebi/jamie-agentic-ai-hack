@@ -5,11 +5,11 @@ import { createLibrary, defineComponent } from "@openuidev/react-lang";
 import {
   Activity, ArrowLeft, Ban, CalendarCheck, Check, ChevronRight, CircleCheck, CircleX, Clock, Hourglass,
   MessageCircleQuestion, MessageCircleReply, Phone, PhoneCall, PhoneOff, PhoneOutgoing, Radio, Scissors, Sparkles,
-  Stethoscope, TriangleAlert, Utensils, Wifi, type LucideIcon,
+  Stethoscope, Store, TriangleAlert, Utensils, Wifi, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod/v4";
-import { Confetti, LiveDot, Logo, Waveform } from "@/components/brand";
+import { Confetti, LiveDot, Logo, TypingDots, Waveform } from "@/components/brand";
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { duration, statusLook, when, type Tone } from "./format";
@@ -53,27 +53,39 @@ function goalIcon(goal: string): LucideIcon {
 
 const isLiveStatus = (s: string) => s === "dialing" || s === "active" || s === "waiting_user";
 
-/** Animate a number string from 0 up to its value the first time it shows. */
-function CountUp({ value }: { value: string }) {
+// Last number shown per stat label, so a remount (new screen, re-parse) picks up where it was
+// instead of counting from 0 again.
+const lastShown = new Map<string, number>();
+
+/** Forget the stats on screen (call on sign out, so the next account counts from 0). */
+export function resetStats() {
+  lastShown.clear();
+}
+
+/** Animate a number string to its value, starting from whatever is on screen now. */
+function CountUp({ id, value }: { id: string; value: string }) {
   const target = /^\d+$/.test(value) ? Number(value) : null;
-  const [shown, setShown] = useState(target === null ? value : "0");
-  const from = useRef(0);
+  const current = useRef(lastShown.get(id) ?? 0);
+  const [shown, setShown] = useState(target === null ? value : String(current.current));
   useEffect(() => {
     if (target === null) return setShown(value);
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return setShown(value);
+    const show = (n: number) => {
+      current.current = n;
+      lastShown.set(id, n);
+      setShown(String(n));
+    };
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return show(target);
     const start = performance.now();
-    const base = from.current;
+    const base = current.current;
     let raf = 0;
     const step = (t: number) => {
       const k = Math.min(1, (t - start) / 700);
-      const eased = 1 - Math.pow(1 - k, 3);
-      setShown(String(Math.round(base + (target - base) * eased)));
+      show(Math.round(base + (target - base) * (1 - Math.pow(1 - k, 3))));
       if (k < 1) raf = requestAnimationFrame(step);
-      else from.current = target;
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [value]);
+  }, [id, value]);
   return <>{shown}</>;
 }
 
@@ -100,7 +112,7 @@ export const Stat = defineComponent({
           </span>
         </div>
         <div className={cn("mt-3 text-[34px] font-semibold leading-none tracking-tight tabular-nums", props.value !== "0" && TONE_TEXT[props.tone], props.tone === "neutral" && "text-foreground")}>
-          <CountUp value={props.value} />
+          <CountUp id={props.label} value={props.value} />
         </div>
       </div>
     );
@@ -150,8 +162,8 @@ export const CallRow = defineComponent({
             ) : (
               <>{when(props.createdAt)}{props.durationS != null && <> · {duration(props.durationS)}</>}</>
             )}
-            <span className="hidden sm:inline">· {props.subtitle}</span>
           </span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{props.subtitle}</span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
           <StatusBadge {...look} />
@@ -187,7 +199,7 @@ export const Empty = defineComponent({
       </span>
       <h3 className="relative mt-6 text-xl font-semibold tracking-tight">Nothing on the line yet</h3>
       <p className="relative mt-2 max-w-sm text-muted-foreground">{props.text}</p>
-      <div className="relative mt-6 rounded-[18px] rounded-br-[6px] bg-[#0a84ff] px-4 py-2 text-[15px] text-white shadow-soft">
+      <div className="relative mt-6 rounded-[18px] rounded-br-[6px] bg-imessage px-4 py-2 text-[15px] text-white shadow-soft">
         Book a table for 4 tomorrow at 8 🍝
       </div>
       <span className="relative mt-2 text-xs text-muted-foreground">Try texting Jamie this</span>
@@ -261,7 +273,7 @@ export const CallHeader = defineComponent({
     const Icon = live ? PhoneCall : look.tone === "good" ? CircleCheck : look.tone === "bad" ? PhoneOff : goalIcon(props.title);
     return (
       <div className="rounded-3xl">
-        <div className={cn("relative overflow-hidden rounded-3xl border bg-card p-5 shadow-lift sm:p-6", live && "live-border")}>
+        <div className={cn("relative overflow-hidden rounded-3xl border bg-card p-5 shadow-lift sm:p-6", live && "live-border live-border-spin")}>
           {live && <div aria-hidden className="bg-brand absolute -right-20 -top-20 size-60 rounded-full opacity-15 blur-3xl" />}
           {props.status === "ended" && props.outcome === "success" && <Confetti count={28} />}
           <div className="relative flex items-start gap-4">
@@ -284,8 +296,8 @@ export const CallHeader = defineComponent({
               <TimerRing seconds={props.durationS ?? 0} max={props.maxS} live />
             ) : (
               props.durationS != null && (
-                <div className="hidden shrink-0 text-right sm:block">
-                  <div className="text-2xl font-semibold tabular-nums">{duration(props.durationS)}</div>
+                <div className="shrink-0 text-right">
+                  <div className="text-xl font-semibold tabular-nums sm:text-2xl">{duration(props.durationS)}</div>
                   <div className="text-xs text-muted-foreground">call length</div>
                 </div>
               )
@@ -295,9 +307,7 @@ export const CallHeader = defineComponent({
             <div className="relative mt-5 flex items-center gap-3 rounded-2xl bg-muted/70 px-4 py-3">
               {onHold ? (
                 <>
-                  <span className="flex gap-1">
-                    {[0, 1, 2].map((i) => <span key={i} className="typing-dot size-1.5 rounded-full bg-warn" style={{ animationDelay: `${i * 160}ms` }} />)}
-                  </span>
+                  <TypingDots className="text-warn" />
                   <span className="text-sm font-medium">Business on hold while Jamie checks with you</span>
                 </>
               ) : (
@@ -324,7 +334,7 @@ export const PendingQuestion = defineComponent({
       <div className="relative flex items-center gap-2 text-[13px] font-semibold text-warn">
         <MessageCircleQuestion className="size-4" /> Your answer is needed
         <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-card/80 px-2.5 py-1 text-[11px] font-medium text-foreground">
-          <span className="size-1.5 rounded-full bg-[#0a84ff]" /> Reply in iMessage
+          <span className="size-1.5 rounded-full bg-imessage" /> Reply in iMessage
         </span>
       </div>
       <div className="relative mt-3 text-lg font-semibold leading-snug tracking-tight sm:text-xl">{props.question}</div>
@@ -375,7 +385,7 @@ const TL: Record<string, { icon: LucideIcon; cls: string }> = {
   started: { icon: PhoneCall, cls: "bg-live-soft text-live" },
   progress: { icon: Activity, cls: "bg-live-soft text-live" },
   question: { icon: MessageCircleQuestion, cls: "bg-warn-soft text-warn" },
-  answer: { icon: MessageCircleReply, cls: "bg-[#0a84ff] text-white" },
+  answer: { icon: MessageCircleReply, cls: "bg-imessage text-white" },
   poll_failed: { icon: TriangleAlert, cls: "bg-warn-soft text-warn" },
   result: { icon: CircleCheck, cls: "bg-good text-white" },
   failed: { icon: CircleX, cls: "bg-bad text-white" },
@@ -415,7 +425,7 @@ export const TranscriptLine = defineComponent({
     return (
       <div className={cn("flex max-w-[85%] items-end gap-2", agent ? "flex-row-reverse self-end" : "self-start")}>
         {agent ? <Logo className="size-6" /> : (
-          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><Utensils className="size-3" /></span>
+          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><Store className="size-3" /></span>
         )}
         <div className={cn("flex flex-col", agent && "items-end")}>
           <span className="mx-2 mb-0.5 text-[11px] text-muted-foreground">{agent ? "Jamie" : "Business"}</span>
@@ -465,12 +475,11 @@ export const Page = defineComponent({
     ])),
   }),
   component: ({ props, renderNode }) => {
-    // A call's own header card already names the screen, so only list screens get the big title.
-    const isDetail = props.children.some((c: { typeName?: string }) => c?.typeName === "CallHeader");
+    // dashboard.py sends an empty title when a header card already names the screen.
     const kids = renderNode(props.children);
     return (
       <main className="flex flex-col gap-5">
-        {!isDetail && (
+        {props.title && (
           <div className="rise">
             <h1 className="text-[34px] font-semibold leading-tight tracking-[-0.03em]">{props.title}</h1>
             {props.subtitle && <p className="text-muted-foreground">{props.subtitle}</p>}
