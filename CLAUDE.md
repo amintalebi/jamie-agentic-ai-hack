@@ -29,7 +29,17 @@ Fake sends show up in the server log as `[fake send_text]` / `[fake send_poll]`.
 
 Call agent without a phone: `python scripts/fake_server.py` plus `python scripts/chat_test.py` (see `docs/role-e-call-conversation.md`).
 
-There are no tests or lint config yet.
+Dashboard PWA (`web/`, Vite + React + OpenUI):
+```
+cd web && npm install
+npm run dev          # http://localhost:5173/app/, proxies /api to the server on :8000
+npm test             # parses and renders the server's sample screens
+npm run fixtures     # regenerate those samples after changing server/dashboard.py
+npm run build        # web/dist, served by the server at /app/
+```
+Open `http://localhost:8000/app/#token=<DASHBOARD_TOKEN>` once; the token is kept in localStorage.
+
+There are no Python tests or lint config yet.
 
 ## What we are building
 
@@ -92,6 +102,11 @@ contracts.md         human-readable copy of the contracts
 Actual layout differs from the sketch above in two ways:
 - Contracts live in `common/contracts.py` (not `server/`), shared by both processes. `call_agent/contracts_local.py` is a shim that re-exports them.
 - `server/` is a package: run it as `server.main:app` from the repo root and import siblings as `from server import calls`. The server Docker build context is the repo root, so the image includes `common/`.
+
+### Dashboard (call monitoring)
+`server/history.py` records every call and its timeline (Postgres tables `calls` and `call_events`, created at startup; in memory without `DATABASE_URL`). Writes never raise, so a database problem cannot break a live call. `server/dashboard.py` turns that history into screens written in OpenUI Lang (https://openui.com), built in code with no LLM, and serves them at `/api/dashboard/*` behind `DASHBOARD_TOKEN`. `web/` registers the matching components (`web/src/library.tsx`) and renders them with OpenUI's `<Renderer>`, refreshing every 2 s while a call is live.
+
+OpenUI Lang arguments are **positional, in Zod key order**. When you change a component, change the Python call in `dashboard.py` and the schema in `library.tsx` together, then run `npm run fixtures && npm test`. Props the server may send as `null` must be `.optional()` (OpenUI rejects `null` for required props, even `.nullable()` ones).
 
 ### Adapters and fakes
 Every outside service sits behind a small `Protocol` with a real and a fake implementation, chosen by an env var (all default to `fake`): `gateway.Messenger` (`MESSENGER_MODE=fake|linq`), `stt.Transcriber` (`STT_MODE=fake|scribe`), `calls.CallDispatcher` (`CALLS_MODE=fake|livekit`), `memory.MemoryStore` (in-memory for now). The fake dispatcher plays a scripted call over HTTP against the server's own `/calls/...` routes, so the mid-call poll round trip works without telephony. Module-level functions (`gateway.send_text`, `memory.remember`, ...) are the interface other modules call; never reach into an adapter directly.
