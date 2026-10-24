@@ -6,6 +6,7 @@ The model speaks the hold line itself before ask_user (see prompts.py); the tool
 """
 import json
 import logging
+import os
 import re
 from typing import Literal
 
@@ -20,7 +21,10 @@ log = logging.getLogger("call_agent.tools")
 
 ANSWER_WAIT_S = 40
 ANSWER_RETRY_S = 5  # one retry, total <= 45 s
-HOLD_UPDATE_AFTER_S = 15  # one spoken "still here" while the poll is open, inside ANSWER_WAIT_S
+# One spoken "still here" while the poll is open, inside ANSWER_WAIT_S. Off by default
+# (HOLD_UPDATE=true enables it): untested on a real line, and say() from inside a tool
+# may play at once rather than after the hold line.
+HOLD_UPDATE_AFTER_S = 15
 HOLD_UPDATE = {
     "de": "Danke fürs Warten, einen Moment noch.",
     "en": "Thanks for holding, one more moment.",
@@ -31,6 +35,10 @@ HOLD_UPDATE = {
 TRANSLATE_MODEL = "claude-haiku-4-5"
 _GERMAN_RE = re.compile(r"[äöüÄÖÜß]|\b(ja|nein|passt|gerne|danke|uhr|datum)\b", re.IGNORECASE)
 _client: anthropic.AsyncAnthropic | None = None
+
+
+def _hold_update_enabled() -> bool:
+    return os.getenv("HOLD_UPDATE", "false").strip().lower() in ("1", "true", "yes")
 
 
 def no_answer_message(brief: CallBrief) -> str:
@@ -111,10 +119,13 @@ class CallTools:
         await self.events.post(CallEvent(
             call_id=self.brief.call_id, type="question", text=question, options=options,
         ))
-        answer = await self.events.wait_answer(HOLD_UPDATE_AFTER_S)
-        if answer is None:
-            self._hold_update(context)
-            answer = await self.events.wait_answer(ANSWER_WAIT_S - HOLD_UPDATE_AFTER_S)
+        if _hold_update_enabled():
+            answer = await self.events.wait_answer(HOLD_UPDATE_AFTER_S)
+            if answer is None:
+                self._hold_update(context)
+                answer = await self.events.wait_answer(ANSWER_WAIT_S - HOLD_UPDATE_AFTER_S)
+        else:
+            answer = await self.events.wait_answer(ANSWER_WAIT_S)
         if answer is None:
             answer = await self.events.wait_answer(ANSWER_RETRY_S)
         if answer is None:
