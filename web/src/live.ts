@@ -74,12 +74,12 @@ class Store {
 
   private onEvent: Handler = (event, data) => {
     if (event === "snapshot") {
-      this.set({ lines: data.lines ?? [], partial: data.partial ?? null, ended: Boolean(data.ended), connected: true });
+      this.set({ lines: data.lines ?? [], partial: data.partial?.text ? data.partial : null, ended: Boolean(data.ended), connected: true });
     } else if (event === "line") {
       const partial = this.state.partial?.speaker === data.speaker ? null : this.state.partial;
       this.set({ lines: [...this.state.lines, data], partial });
     } else if (event === "partial") {
-      this.set({ partial: data });
+      this.set({ partial: data?.text ? data : null }); // empty text: the server cleared it
     } else if (event === "end") {
       this.set({ ended: true, partial: null });
     }
@@ -93,7 +93,14 @@ class Store {
         await readStream(this.callId, this.onEvent, ctrl.signal);
         backoff = 1000; // a clean close: reconnect right away unless the call ended
       } catch (e) {
-        if (ctrl.signal.aborted || e instanceof AuthError) break; // the polling loop handles logout
+        if (ctrl.signal.aborted) break;
+        if (e instanceof AuthError) {
+          // The polling loop logs out; drop this store so the next mount after login starts fresh.
+          this.set({ connected: false });
+          if (this.ctrl === ctrl) this.ctrl = undefined;
+          stores.delete(this.callId);
+          return;
+        }
       }
       if (ctrl.signal.aborted || this.state.ended) break;
       this.set({ connected: false });

@@ -45,10 +45,22 @@ class CallState:
     answer: str | None = None                    # None + answer_ready set = "no answer coming"
     answer_ready: asyncio.Event = field(default_factory=asyncio.Event)
     status_updates: int = 0                      # edits this call made to the user's status bubble
+    placed_at: float = field(default_factory=time.monotonic)
 
 
 _calls: dict[str, CallState] = {}
 _background: set[asyncio.Task] = set()  # strong refs so running tasks are not garbage-collected
+
+
+LIVE_SLACK_S = 120  # past max_call_seconds a call without a result counts as dead (agent crashed)
+
+
+def is_live(call_id: str) -> bool:
+    """Is this call still running? Used by the live transcript stream (server/live.py)."""
+    state = _calls.get(call_id)
+    if state is None or state.status == "ended":
+        return False
+    return time.monotonic() - state.placed_at < state.brief.max_call_seconds + LIVE_SLACK_S
 
 
 def _spawn(coro) -> None:
@@ -100,16 +112,22 @@ class FakeDispatcher:
 
                 said: list[dict] = []
 
+                async def line(speaker: str, text: str, final: bool = True) -> None:
+                    # Best effort, like the real agent: the live view must never break the call.
+                    try:
+                        await client.post(f"{base}/transcript", json={"speaker": speaker, "text": text, "final": final})
+                    except httpx.HTTPError as e:
+                        log.warning("fake call %s: transcript line not posted: %s", brief.call_id, e)
+
                 async def say(speaker: str, text: str) -> None:
                     said.append({"speaker": speaker, "text": text})
                     # Live transcript, with the business's words arriving word by word like real STT.
                     if speaker == "business":
                         words = text.split()
                         for i in range(1, len(words)):
-                            await client.post(f"{base}/transcript", json={"speaker": speaker,
-                                              "text": " ".join(words[:i]), "final": False})
+                            await line(speaker, " ".join(words[:i]), final=False)
                             await asyncio.sleep(0.25)
-                    await client.post(f"{base}/transcript", json={"speaker": speaker, "text": text})
+                    await line(speaker, text)
                     await asyncio.sleep(1)
 
                 await asyncio.sleep(1)
@@ -165,6 +183,7 @@ async def place_call(brief: CallBrief) -> str:
         await dispatcher.dispatch(brief, plan)
     except Exception as e:
         _calls.pop(brief.call_id, None)
+        live.end(brief.call_id)
         log.exception("dispatch failed for call %s", brief.call_id)
         history.event_received(CallEvent(call_id=brief.call_id, type="failed", text="Could not start the call"))
         raise CallRefused("could not start the call") from e

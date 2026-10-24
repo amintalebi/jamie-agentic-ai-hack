@@ -17,7 +17,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from common.masking import mask_phone
-from server import auth, history, live
+from server import auth, calls, history, live
 
 log = logging.getLogger("server.dashboard")
 router = APIRouter(prefix="/api/dashboard")
@@ -182,7 +182,7 @@ async def call_live(call_id: str, user: str = Depends(auth.current_user)) -> Str
     if call is None:
         raise HTTPException(404, "unknown call")
     return StreamingResponse(
-        live.stream(call_id, already_ended=not _is_live(call)),
+        live.stream(call_id, is_live=lambda: calls.is_live(call_id)),
         media_type="text/event-stream",
         # X-Accel-Buffering: nginx in front of us must pass events through, not buffer them.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
