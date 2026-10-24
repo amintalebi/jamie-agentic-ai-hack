@@ -12,6 +12,10 @@ server {
     server_name _;
     root /usr/share/nginx/html;
     server_tokens off;
+    # Redirects stay relative to the caller's origin. Otherwise nginx expands "/app/"
+    # to an absolute URL using the listen port (8080) and the http scheme Traefik
+    # forwards on, so the root goes to https://...:8080/app/.
+    absolute_redirect off;
 
     gzip_static on;                      # serve the precompressed .gz files
     gzip on;                             # and compress API responses on the fly
