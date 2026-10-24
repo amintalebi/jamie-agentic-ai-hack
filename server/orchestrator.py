@@ -5,6 +5,7 @@ with tools: ask_user, send_message, remember, find_business, search_restaurants,
 Includes a deterministic fallback when ANTHROPIC_API_KEY is not configured so local
 smoke tests and the demo script work out of the box.
 """
+import asyncio
 import json
 import logging
 import re
@@ -89,6 +90,7 @@ def _build_system_prompt(
     user_id: str,
     facts: dict[str, str],
     active: list[CallBrief],
+    businesses: list[dict] | None = None,
 ) -> str:
     facts_lines = "\n".join(f"- {k}: {v}" for k, v in sorted(facts.items())) or "- (none yet)"
     if active:
@@ -102,7 +104,7 @@ def _build_system_prompt(
     today = now.strftime("%A, %d %b %Y")
     tomorrow = (now + timedelta(days=1)).strftime("%A, %d %b %Y")
 
-    return f"""You are Jamie, a personal assistant that lives in iMessage.
+    return f"""You are Eve, a personal assistant that lives in iMessage.
 Right now it is {now.strftime("%H:%M")} on {today}. Tomorrow is {tomorrow}.
 Resolve relative dates like "tomorrow" or "Friday" against that before putting them in a call goal.
 
@@ -130,14 +132,25 @@ Core behavior:
 - When you call `ask_user`, do NOT call `send_message` in the same turn because `ask_user` already sends the question and poll to the user and ends your turn.
 - Never call `place_call` without also sending a one-line message via `send_message` telling the user who you are calling and what for (for example: "Calling Trattoria da Demo now to book a table for 4 tomorrow at 20:00 inside.").
 - Do not place a duplicate call if there is already an active call for the same goal.
+- After a call you text the summary yourself (with confetti and a calendar invite when it is booked), so do not
+  repeat those. If the user later asks for the booking in their calendar, use `send_calendar_invite`.
+- If the user just says thanks or similar, a `react` with "love" is enough; no text needed.
 
 User phone (user_id): {user_id}
 
 User profile facts:
 {facts_lines}
 
+Known businesses (use these numbers directly, no `find_business` needed for them):
+{_business_lines(businesses)}
+
 Active calls for this user:
 {active_lines}"""
+
+
+def _business_lines(businesses: list[dict] | None) -> str:
+    rows = [f"- {b.get('name')} ({b.get('kind', '')}): {b.get('phone')}" for b in businesses or [] if b.get("phone")]
+    return "\n".join(rows) or "- (none)"
 
 
 def _search_rule() -> str:
@@ -166,6 +179,25 @@ class SendMessageArgs(BaseModel):
     text: str = Field(
         description="Short plain-text iMessage to send to the user. No markdown, no em dashes."
     )
+    effect: Literal["confetti", "celebration", "fireworks", "balloons", "hearts", "gentle", "slam"] | None = Field(
+        default=None,
+        description="Optional iMessage effect. Only for real good news the user wanted (e.g. a confirmed "
+                    "booking): confetti or celebration. Leave out for everything else.",
+    )
+
+
+class ReactArgs(BaseModel):
+    reaction: Literal["love", "like", "laugh", "emphasize"] = Field(
+        description="Tapback on the user's latest message, e.g. 'love' when they thank you. Use sparingly."
+    )
+
+
+class CalendarArgs(BaseModel):
+    title: str = Field(description="e.g. 'Dinner at Trattoria da Demo (4 people)'.")
+    start: str = Field(description="Local Berlin date and time, ISO 8601, e.g. '2026-10-25T21:00'.")
+    duration_minutes: int = Field(default=120)
+    location: str = Field(default="", description="Business name and address if known.")
+    notes: str = Field(default="", description="e.g. booking name, seating.")
 
 
 class RememberArgs(BaseModel):
@@ -221,7 +253,10 @@ class TurnTracker:
     def __init__(self) -> None:
         self.asked_user = False
         self.sent_message = False
+        self.reacted = False                 # a tapback alone can be the whole answer ("thanks!")
         self.placed_call_id: str | None = None
+        self.last_batch: list[str] = []      # tool names of the latest batch
+        self.last_batch_failed = False       # any of them returned an error
 
 
 # Numbers a user confirmed in a poll ("Call X on +49...?" -> "Yes, call"), so place_call can check in
@@ -251,8 +286,9 @@ def _trusted_numbers(user_id: str, facts: dict[str, str], found: set[str]) -> se
     return trusted
 
 
-def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) -> list:
-    found_numbers: set[str] = set()  # from find_business this turn
+def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker,
+                     known_numbers: set[str] | None = None) -> list:
+    found_numbers: set[str] = set(known_numbers or ())  # directory numbers in the prompt + find_business hits
     @tool("ask_user", args_schema=AskUserArgs)
     async def ask_user_tool(question: str, options: list[str]) -> str:
         """Send an iMessage poll to ask the user a clarifying question. Ends the current turn."""
@@ -271,14 +307,40 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
         return "Poll sent to user. Stop now and wait for the user's vote."
 
     @tool("send_message", args_schema=SendMessageArgs)
-    async def send_message_tool(text: str) -> str:
+    async def send_message_tool(text: str, effect: str | None = None) -> str:
         """Send a short text message to the user on iMessage."""
         clean = _sanitize_text(text)
         if not clean:
             return "Empty message ignored."
-        await _reply(user_id, clean)
+        await _reply(user_id, clean, effect)
         tracker.sent_message = True
         return "Message sent."
+
+    @tool("react", args_schema=ReactArgs)
+    async def react_tool(reaction: str) -> str:
+        """Put a tapback on the user's latest message."""
+        try:
+            if await gateway.react(user_id, reaction):
+                tracker.reacted = True
+                return "Reacted."
+            return "No message to react to."
+        except Exception as e:
+            log.warning("react for %s failed: %s", mask_phone(user_id), e)
+            return "Reaction failed, carry on without it."
+
+    @tool("send_calendar_invite", args_schema=CalendarArgs)
+    async def calendar_tool(title: str, start: str, duration_minutes: int = 120,
+                            location: str = "", notes: str = "") -> str:
+        """Send a calendar invite (.ics) the user can tap to add to their calendar. Only for confirmed plans."""
+        try:
+            await gateway.send_calendar_invite(user_id, _sanitize_text(title), datetime.fromisoformat(start),
+                                               duration_minutes, _sanitize_text(location), _sanitize_text(notes))
+        except ValueError:
+            return "ERROR: start must be ISO 8601 local time like 2026-10-25T21:00."
+        except Exception as e:
+            log.warning("calendar invite for %s failed: %s", mask_phone(user_id), e)
+            return "Calendar invite failed. Do not retry; tell the user the booking details in text instead."
+        return "Calendar invite sent."
 
     @tool("remember", args_schema=RememberArgs)
     async def remember_tool(key: str, value: str) -> str:
@@ -371,11 +433,17 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
     return [
         ask_user_tool,
         send_message_tool,
+        react_tool,
+        calendar_tool,
         remember_tool,
         find_business_tool,
         search_restaurants_tool,
         place_call_tool,
     ]
+
+
+# Tools after which a turn is usually over (see should_continue_after_tools).
+FINAL_TOOLS = {"send_message", "react", "send_calendar_invite", "place_call"}
 
 
 class AgentState(TypedDict):
@@ -395,6 +463,7 @@ def _build_agent_graph(llm_with_tools: Any, tools_by_name: dict[str, Any], track
         last_msg = state["messages"][-1]
         tool_calls = getattr(last_msg, "tool_calls", None) or []
         new_messages: list[BaseMessage] = list(state["messages"])
+        tracker.last_batch, tracker.last_batch_failed = [], False
 
         for tc in tool_calls:
             name = tc["name"]
@@ -410,6 +479,8 @@ def _build_agent_graph(llm_with_tools: Any, tools_by_name: dict[str, Any], track
                     log.exception("tool %s failed", name)
                     result_str = f"Error executing {name}: {exc}"
             new_messages.append(ToolMessage(content=str(result_str), tool_call_id=call_id))
+            tracker.last_batch.append(name)
+            tracker.last_batch_failed |= str(result_str).lower().startswith("error")
             if tracker.asked_user:
                 # Immediately stop executing remaining tools once ask_user has sent a poll
                 break
@@ -428,6 +499,11 @@ def _build_agent_graph(llm_with_tools: Any, tools_by_name: dict[str, Any], track
 
     def should_continue_after_tools(state: AgentState) -> str:
         if tracker.asked_user:
+            return END
+        # Said or did the last thing (a message, a call): another model round trip would only add
+        # latency and keep the typing bubble up. Not after an error: the model must handle it.
+        if (tracker.last_batch and set(tracker.last_batch) <= FINAL_TOOLS and not tracker.last_batch_failed
+                and (tracker.sent_message or tracker.placed_call_id or tracker.reacted)):
             return END
         return "agent"
 
@@ -454,20 +530,21 @@ def _history_to_langchain(recent: list[dict]) -> list[BaseMessage]:
     return msgs
 
 
-async def _run_langgraph_turn(user_id: str, text: str) -> None:
+async def _run_langgraph_turn(user_id: str, text: str, tracker: TurnTracker) -> None:
     facts = await memory.get_facts(user_id)
     recent = await memory.recent_messages(user_id, limit=20)
     active = calls.active_calls(user_id)
 
-    tracker = TurnTracker()
-    tools = _make_turn_tools(user_id, facts, tracker)
+    businesses = await memory.find_business("")  # small demo directory; saves a find_business round trip
+    known = {normalize(str(b["phone"])) for b in businesses if isinstance(b, dict) and b.get("phone")}
+    tools = _make_turn_tools(user_id, facts, tracker, known)
     tools_by_name = {t.name: t for t in tools}
 
     llm = _make_llm(max_tokens=1000, timeout=LLM_TIMEOUT_S)
     llm_with_tools = llm.bind_tools(tools)
     app = _build_agent_graph(llm_with_tools, tools_by_name, tracker)
 
-    sys_prompt = _build_system_prompt(user_id, facts, active)
+    sys_prompt = _build_system_prompt(user_id, facts, active, businesses)
     history_msgs = _history_to_langchain(recent)
     if not history_msgs or not isinstance(history_msgs[-1], HumanMessage):
         history_msgs.append(HumanMessage(content=text))
@@ -478,6 +555,8 @@ async def _run_langgraph_turn(user_id: str, text: str) -> None:
 
     if tracker.asked_user or tracker.sent_message:
         return
+    if tracker.reacted and not tracker.placed_call_id:
+        return  # a tapback was the answer
 
     # If the model ended without calling send_message or ask_user, send its final text response
     for msg in reversed(final_state["messages"]):
@@ -568,8 +647,18 @@ async def _fallback_turn(user_id: str, text: str) -> None:
     await _reply(user_id, f"Got it: {_sanitize_text(text)}")
 
 
+_user_locks: dict[str, asyncio.Lock] = {}
+
+
 async def handle_message(user_id: str, text: str) -> None:
-    """Run one orchestrator turn for a new user message (text or voice-note transcript)."""
+    """Run one orchestrator turn for a new user message (text or voice-note transcript).
+    One turn per user at a time: a vote and a text arriving together would otherwise run two turns
+    on the same history and could send two polls or place two calls."""
+    async with _user_locks.setdefault(user_id, asyncio.Lock()):
+        await _handle_message(user_id, text)
+
+
+async def _handle_message(user_id: str, text: str) -> None:
     await memory.log_message(user_id, "user", text)
     _note_poll_answer(user_id, text)
     if text.strip().lower().startswith("/call"):
@@ -581,9 +670,14 @@ async def handle_message(user_id: str, text: str) -> None:
         await _fallback_turn(user_id, text)
         return
 
+    tracker = TurnTracker()
     try:
-        await _run_langgraph_turn(user_id, text)
+        await _run_langgraph_turn(user_id, text, tracker)
     except Exception:
+        if tracker.sent_message or tracker.asked_user or tracker.placed_call_id:
+            # The user already heard from us this turn; the fallback could repeat a poll or place a second call.
+            log.exception("LangGraph turn failed for %s after acting, no fallback", mask_phone(user_id))
+            return
         log.exception("LangGraph turn failed for %s, falling back", mask_phone(user_id))
         await _fallback_turn(user_id, text)
 
@@ -623,30 +717,66 @@ def _fallback_call_summary(brief: CallBrief, event: CallEvent) -> str:
     return _sanitize_text(f"Call finished ({event.outcome or event.type}): {event.text}")
 
 
-async def _summarize_call_with_llm(brief: CallBrief, event: CallEvent) -> str:
-    if not settings.ANTHROPIC_API_KEY:
-        return _fallback_call_summary(brief, event)
+class CallWrapUp(BaseModel):
+    """What the user gets after a call: the summary, and whether to celebrate and send an invite."""
+    text: str
+    celebrate: bool = False
+    calendar: dict | None = None  # {"title", "start" (ISO local), "duration_minutes", "location", "notes"}
 
+
+def _fallback_wrap_up(brief: CallBrief, event: CallEvent) -> CallWrapUp:
+    return CallWrapUp(text=_fallback_call_summary(brief, event),
+                      celebrate=event.type == "result" and event.outcome == "success")
+
+
+async def _wrap_up_with_llm(brief: CallBrief, event: CallEvent) -> CallWrapUp:
+    """One model call decides the summary, the confetti and the calendar invite together."""
+    if not settings.ANTHROPIC_API_KEY:
+        return _fallback_wrap_up(brief, event)
+
+    now = datetime.now().astimezone()
     llm = _make_llm(max_tokens=500, timeout=15.0)
-    prompt = f"""Write a friendly 2 to 3 line iMessage summary of a phone call you just completed for {brief.caller_name}.
-Rules:
-- Plain text only, no markdown, no bullets, no em dashes or en dashes.
-- State clearly what was agreed (time, party size, date, booking name, any notes) or why it failed.
-- Keep it concise and natural.
+    prompt = f"""You are Eve, an iMessage assistant. You just finished a phone call for {brief.caller_name}.
+Today is {now.strftime("%A, %d %b %Y")}, local time {now.strftime("%H:%M")} (Berlin).
+
+Reply with ONE JSON object and nothing else:
+{{"text": "...", "celebrate": true|false, "calendar": null or {{"title": "...", "start": "YYYY-MM-DDTHH:MM", "duration_minutes": 120, "location": "...", "notes": "..."}}}}
+
+- text: a friendly 1 to 3 line iMessage. Say clearly what was agreed (date, time, party size, booking name, notes)
+  or why it failed and what you suggest next. Plain text, no markdown, no em dashes or en dashes.
+- celebrate: true only if what the user asked for is now confirmed (e.g. the table is booked). It adds confetti.
+- calendar: only for a confirmed booking with a known date and time; start is the confirmed local time.
+  null for anything uncertain, partial or failed.
 
 Call goal: {brief.goal}
 Event type: {event.type}
 Outcome: {event.outcome}
-Summary text: {event.text}
+What happened: {event.text}
 Details: {json.dumps(event.details or {}, ensure_ascii=False)}"""
 
     try:
         res = await llm.ainvoke([HumanMessage(content=prompt)])
-        text = _sanitize_text(_extract_text(res.content))
-        return text or _fallback_call_summary(brief, event)
+        raw = _extract_text(res.content)
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        wrap = CallWrapUp.model_validate_json(match.group(0)) if match else None
+        if wrap is None or not _sanitize_text(wrap.text):
+            return _fallback_wrap_up(brief, event)
+        wrap.text = _sanitize_text(wrap.text)
+        return wrap
     except Exception:
-        log.exception("LLM call summary failed for %s, using fallback", event.call_id)
-        return _fallback_call_summary(brief, event)
+        log.exception("LLM call wrap-up failed for %s, using fallback", event.call_id)
+        return _fallback_wrap_up(brief, event)
+
+
+async def _send_calendar(user_id: str, cal: dict) -> None:
+    """Best effort: a bad date or a Linq hiccup must not hide the summary that already went out."""
+    try:
+        await gateway.send_calendar_invite(
+            user_id, _sanitize_text(str(cal.get("title") or "Booking")), datetime.fromisoformat(str(cal["start"])),
+            int(cal.get("duration_minutes") or 120), _sanitize_text(str(cal.get("location") or "")),
+            _sanitize_text(str(cal.get("notes") or "")))
+    except Exception as e:
+        log.warning("calendar invite for %s skipped: %s", mask_phone(user_id), e)
 
 
 def _closing_status(event: CallEvent) -> str:
@@ -666,17 +796,20 @@ async def handle_call_result(event: CallEvent) -> None:
     if brief is None:
         log.warning("result for unknown call %s", event.call_id)
         return
+    # The user is waiting: status and summary first, bookkeeping after.
+    await _set_status(brief.user_id, _closing_status(event))
+    wrap = await _wrap_up_with_llm(brief, event)
+    await _reply(brief.user_id, wrap.text, "confetti" if wrap.celebrate else None)
+    if wrap.calendar and wrap.celebrate:
+        await _send_calendar(brief.user_id, wrap.calendar)
     await memory.save_call(brief, event)
     await _remember_durable_call_facts(brief, event)
-    await _set_status(brief.user_id, _closing_status(event))
-    summary = await _summarize_call_with_llm(brief, event)
-    await _reply(brief.user_id, summary)
 
 
-async def _reply(user_id: str, text: str) -> None:
+async def _reply(user_id: str, text: str, effect: str | None = None) -> None:
     clean = _sanitize_text(text)
     await memory.log_message(user_id, "assistant", clean)
-    await gateway.send_text(user_id, clean)
+    await gateway.send_text(user_id, clean, effect)
 
 
 async def _demo_call(user_id: str) -> None:
