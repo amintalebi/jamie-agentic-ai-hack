@@ -172,7 +172,7 @@ TWILIO_AUTH_TOKEN=
 TWILIO_NUMBER=
 SERVER_PUBLIC_URL=        # ngrok URL, used for Linq webhooks and call events
 SAFE_MODE=true            # default; true = every call rings SAFE_MODE_NUMBER, false = the real number
-SAFE_MODE_NUMBER=         # E.164 of the teammate playing the restaurant
+SAFE_MODE_NUMBER=         # E.164 of the teammate playing the business
 ```
 
 ## Contracts (do not change without telling the whole team)

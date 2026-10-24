@@ -1,4 +1,4 @@
-"""Restaurant search for the orchestrator via the DeepSeek Search API.
+"""Business search (any kind of business) for the orchestrator via the DeepSeek Search API.
 
 Docs: https://api-docs.deepseek.com/guides/search/
 POST https://api.deepseek.com/v1/tools/search with {"query", "count"} -> {"results": [...]}.
