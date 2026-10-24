@@ -358,8 +358,14 @@ async def post_recording(call_id: str, request: Request) -> dict:
     return {"ok": True, "bytes": len(audio), "url": f"/calls/{call_id}/recording"}
 
 
+async def _current_user(authorization: str = Header(default="")) -> str:
+    """auth.current_user, looked up per request: auth imports calls (via users and gateway), so
+    auth.current_user does not exist yet while this module loads."""
+    return await auth.current_user(authorization)
+
+
 @router.get("/calls/{call_id}/recording")
-async def get_recording(call_id: str, user: str = Depends(auth.current_user)) -> Response:
+async def get_recording(call_id: str, user: str = Depends(_current_user)) -> Response:
     """Play or download the recording. Same login as the dashboard; only the call's own user."""
     if await history.get_call(call_id, user) is None:
         raise HTTPException(404, "no recording for this call")
