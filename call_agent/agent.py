@@ -375,6 +375,7 @@ def build_tools(brief: CallBrief, events: EventsClient, transcript: Transcript, 
             outcome: success, partial or failed.
             details: Agreed details, e.g. {"date": "25 Oct", "time": "21:00", "persons": "4", "name": "Sina"}.
         """
+        context.disallow_interruptions()  # the business talking over the goodbye must not cut it off (as in E's end_call)
         await context.wait_for_playout()  # our goodbye has been heard
         state.callee_paused.clear()
         try:  # let the business say goodbye too
