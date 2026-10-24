@@ -64,7 +64,7 @@ The call monitor (an installable PWA) is at `http://localhost:8080/app/`. Enter 
 Full setup, as components land:
 
 1. Copy `.env.example` to `.env` and fill in the keys.
-2. Set `ALLOWED_CALL_NUMBERS` to the numbers you are allowed to dial. The agent refuses every other number.
+2. Set `SAFE_MODE_NUMBER` to the teammate playing the restaurant. With `SAFE_MODE` on (default) every call rings that number; unset, no call is placed.
 3. Expose the server with ngrok and put the URL in `SERVER_PUBLIC_URL`.
 4. Start `server/` and `call_agent/`.
 

@@ -101,7 +101,7 @@ class CallTools:
                 f"{self.brief.caller_name} did not answer in time. Tell the business that "
                 f"{self.brief.caller_name} will call back, say goodbye and call end_call with outcome partial."
             )
-        return f"{self.brief.caller_name} answered: {answer}"
+        return f"{self.brief.caller_name} answered: {answer}. Relay this to the business and carry on."
 
     async def end_call(
         self,
@@ -113,7 +113,9 @@ class CallTools:
             return "The call has already ended."
         self.ended = True
         if context is not None:
-            await context.wait_for_playout()  # let the goodbye finish before hanging up
+            # The business talking over the goodbye must not cut it off; hang up only after it played.
+            context.disallow_interruptions()
+            await context.wait_for_playout()
         summary = f"{outcome}: " + ", ".join(f"{k}={v}" for k, v in details.items())
         await self.events.post(CallEvent(
             call_id=self.brief.call_id, type="result", text=summary, outcome=outcome,
@@ -132,7 +134,8 @@ def make_tools(brief: CallBrief, events: EventsClient, transcript: Transcript) -
     @function_tool
     async def ask_user(context: RunContext, question: str, options: list[str]) -> str:
         """Put the business on hold and ask the user a question via a live poll.
-        Use for anything in must_ask_user_for or anything unexpected.
+        Use for anything in must_ask_user_for or anything unexpected. The user can also type a
+        free answer (for example their surname), which comes back as the answer text.
 
         Args:
             question: Short question to the user, always in English (shown as an iMessage poll), no dashes.

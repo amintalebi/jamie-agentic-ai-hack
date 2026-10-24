@@ -19,7 +19,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 
 from common.masking import mask_phone, mask_text
-from server import calls, orchestrator, settings, stt
+from server import calls, orchestrator, settings, stt, users
 
 log = logging.getLogger("server.gateway")
 router = APIRouter()
@@ -317,14 +317,47 @@ async def send_calendar_invite(to: str, title: str, start: datetime, duration_mi
 
 _seen_ids: set[str] = set()
 
+# Senders who may not use Ada get one explanation per hour, not one per message.
+NOT_ALLOWED_REPLY_EVERY_S = 3600
+_not_allowed_replied: dict[str, float] = {}
+E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+async def may_use(user_id: str) -> bool:
+    """Signed up (users table) or a demo phone (DEMO_USERS). Anyone else could make Ada place calls
+    on our accounts, and would get no identity of their own."""
+    return user_id in settings.demo_users() or await users.is_member(user_id)
+
+
+async def _refuse(user_id: str) -> None:
+    """Tell a sender who may not use Ada how to get access, at most once an hour."""
+    now = time.monotonic()
+    if now - _not_allowed_replied.get(user_id, -NOT_ALLOWED_REPLY_EVERY_S) < NOT_ALLOWED_REPLY_EVERY_S:
+        log.info("ignoring message from %s: not signed up (already told)", mask_phone(user_id))
+        return
+    _not_allowed_replied[user_id] = now
+    if not E164_RE.match(user_id):
+        # An Apple ID email handle: sign-up and calls are tied to a phone number.
+        text = ("Hi, I'm Eve! I work with phone numbers, and this message came from an email address. "
+                "Please text me from your phone number (on iPhone: Settings, Messages, Send & Receive, "
+                "Start New Conversations From).")
+    else:
+        text = (f"Hi, I'm Eve! To use me, sign up with this number at https://{settings.APP_DOMAIN} "
+                "and then text me again.")
+    log.info("message from %s refused: not signed up", mask_phone(user_id))
+    await send_text(user_id, text)
+
 
 async def route_inbound(msg: InboundMessage) -> None:
-    """Dedupe, transcribe voice notes, then send votes to the matching call question or the orchestrator.
-    Never fails silently: on any error the user gets a short apology text."""
+    """Dedupe, check the sender may use Ada, transcribe voice notes, then send votes to the matching
+    call question or the orchestrator. Never fails silently: on any error the user gets a short apology."""
     if msg.message_id in _seen_ids:
         return
     _seen_ids.add(msg.message_id)  # stays marked on failure: the user is told, a retry would double-reply
     try:
+        if not await may_use(msg.user_id):
+            await _refuse(msg.user_id)
+            return
         if msg.vote is not None:
             call_id = calls.match_vote(msg.user_id, msg.vote, msg.poll_id)
             if call_id:
@@ -341,6 +374,12 @@ async def route_inbound(msg: InboundMessage) -> None:
                 text = await stt.transcribe(audio)
             else:
                 text = msg.text
+            # A call on hold is waiting for this user: a typed or spoken reply answers it
+            # (open questions like "what's your surname?" cannot be answered with a poll tap).
+            call_id = calls.pending_question(msg.user_id) if msg.vote is None and text else None
+            if call_id:
+                await calls.resolve_answer(call_id, text.strip())
+                return
             await orchestrator.handle_message(msg.user_id, text)
         finally:
             await _typing(msg.user_id, False)

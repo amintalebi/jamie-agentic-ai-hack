@@ -8,7 +8,7 @@ Then:
     .venv/bin/python scripts/dial_test.py --to +49151XXXXXXX --lang en
     .venv/bin/python scripts/dial_test.py --to +49151XXXXXXX --brief fixtures/brief_italian.json
 
-Refuses any number not in ALLOWED_CALL_NUMBERS. Prints the dispatch, then watches the room's
+Refuses invalid and premium-rate numbers. Prints the dispatch, then watches the room's
 participants (and the SIP call status) until the call ends or --watch seconds pass.
 """
 import argparse
@@ -30,13 +30,9 @@ from livekit import api  # noqa: E402
 
 from contracts_local import CallBrief  # noqa: E402  TODO(hack): switch to server.contracts
 from events import mask_phone  # noqa: E402
+from common.safe_mode import normalize, number_problem  # noqa: E402
 
 AGENT_NAME = os.getenv("CALL_AGENT_NAME") or "jamie-call-agent"
-
-
-def allowed_numbers() -> set[str]:
-    raw = os.getenv("ALLOWED_CALL_NUMBERS", "")
-    return {n.strip() for n in raw.split(",") if n.strip()}
 
 
 def hello_brief(to_number: str, lang: str, call_id: str) -> CallBrief:
@@ -57,7 +53,7 @@ def hello_brief(to_number: str, lang: str, call_id: str) -> CallBrief:
 
 async def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--to", required=True, help="E.164 number to dial, must be in ALLOWED_CALL_NUMBERS")
+    p.add_argument("--to", required=True, help="E.164 number to dial (a teammate who agreed to the test)")
     p.add_argument("--lang", choices=["de", "en"], default="de")
     p.add_argument("--brief", help="path to a CallBrief JSON fixture; to_number and call_id are overridden")
     p.add_argument("--watch", type=int, default=150, help="seconds to watch the room before exiting")
@@ -68,8 +64,10 @@ async def main() -> int:
                         "The real server rejects calls it did not place, so leave this on the fake server.")
     args = p.parse_args()
 
-    if args.to not in allowed_numbers():
-        print(f"refused: {mask_phone(args.to)} is not in ALLOWED_CALL_NUMBERS", file=sys.stderr)
+    args.to = normalize(args.to)
+    problem = number_problem(args.to)
+    if problem:
+        print(f"refused: {mask_phone(args.to)}: {problem}", file=sys.stderr)
         return 2
     for var in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_SIP_OUTBOUND_TRUNK_ID"):
         if not os.getenv(var):

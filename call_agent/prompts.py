@@ -9,7 +9,19 @@ from contracts_local import CallBrief  # TODO(hack): switch to server.contracts
 # Phrasing avoids gendered pronouns for caller_name ("wir", "von {name}").
 
 
+# Set per job by agent.py from the server's dial plan: a real business answers (SAFE_MODE off).
+_real_business = False
+
+
+def set_real_business(value: bool) -> None:
+    global _real_business
+    _real_business = value
+
+
 def _disclose_ai() -> bool:
+    # Real businesses always hear that an assistant is calling.
+    if _real_business:
+        return True
     return os.getenv("DISCLOSE_AI", "false").strip().lower() in ("1", "true", "yes")
 
 
@@ -124,6 +136,8 @@ Dasselbe gilt für alles Unerwartete, das nicht exakt zum Anliegen passt und obe
 - Bei allem, was du nachfragen musst: sag genau "{HOLD_LINE['de']}" und ruf direkt danach ask_user auf. Sag sonst nichts davor. Frage und Antwortoptionen schreibst du immer auf Englisch, auch mitten im deutschen Telefonat: sie erscheinen als Buttons einer iMessage-Umfrage bei {name}, und {name} liest Englisch. Die Frage ist kurz, dazu 2 bis 4 Optionen mit je 1 bis 3 Wörtern (zum Beispiel ["Yes", "No"]), ohne Gedankenstriche.
 - Wenn ask_user eine Antwort liefert: sag genau einen kurzen Satz mit der Antwort (zum Beispiel "Ja, das passt für {name}.") und hör dann auf zu sprechen. In diesem Zug keine Zusammenfassung, keine Frage und keine Wiederholung von Datum, Uhrzeit oder Name. Fang keine neuen Themen an und stell keine neuen Fragen, zum Beispiel nicht, wie bezahlt wird.
 - Wenn du den Namen nennst, sag nur den Namen und frag nicht nach, ob das passt.
+- Namen: Fragt das Geschäft nach dem vollen Namen, dem Nachnamen oder der Schreibweise, nimm full_name oder booking_name aus den Daten oben, falls ein Nachname dabei ist, und buchstabiere ihn Buchstabe für Buchstabe, wenn danach gefragt wird. Kennst du nur einen Vornamen, erfinde nie einen Nachnamen und sag nie, dass du dich später meldest: sag "{HOLD_LINE['de']}" und ruf ask_user auf mit der Frage "They need your full name. Type it, or tap:" und den Optionen ["First name only", "Skip"]. Ist die Antwort ein getippter Name, nenne genau diesen Namen, buchstabiert, falls gefragt. Ist die Antwort "First name only" oder "Skip", sag, dass du nur {name} hast, und frag, ob das für die Reservierung reicht.
+- Eine ask_user-Antwort ist nie "keine Antwort", außer das Tool sagt, dass rechtzeitig keine Antwort kam. Jede andere Antwort, auch eine kurze oder seltsame, ist die Antwort: gib sie weiter und mach mit dem Gespräch weiter.
 - Ob eine Anzahlung oder Gebühr akzeptiert wird, entscheidest nie du: dafür immer ask_user. Erst wenn {name} zugestimmt hat und das Geschäft fragt, wie bezahlt wird (bar, Karte, Überweisung), sag, dass {name} das direkt mit ihnen klärt, und mach weiter.
 - Wenn ask_user keine Antwort liefert, sag, dass {name} sich nochmal meldet, verabschiede dich und ruf end_call mit outcome "partial" auf.
 - Geklärt ist alles, wenn Datum, Uhrzeit, Personen und Name feststehen und jede Frage oder Forderung des Geschäfts beantwortet ist (auch über ask_user). Ist das der Fall, hängst du in deinem nächsten Zug (nicht in dem Zug, in dem du eine ask_user-Antwort weitergibst oder den Namen nennst) die Zusammenfassung in einem einzigen Satz an (Datum, Uhrzeit, Personen, Name) und fragst "Passt das so?".
@@ -182,6 +196,8 @@ The same applies to anything unexpected that does not match the goal exactly and
 - When you must ask: say exactly "{HOLD_LINE['en']}" and call ask_user right after it. Say nothing else before it. Question and options are always in English: they appear as iMessage poll buttons for {name}, who reads English. Keep the question short, with 2 to 4 options of 1 to 3 words each (for example ["Yes", "No"]), and no dashes. Use only what the business actually said: never suggest a date, time or option they have not offered (for example "They're closed on Sundays. Try another day?").
 - When ask_user returns an answer: say exactly one short sentence with the answer (for example "Yes, that works for {name}.") and then stop talking. In that turn no summary, no question and no repeating of date, time or name. Do not open new topics or ask new questions, for example about how to pay.
 - When you give the name, just say the name and do not ask whether that is fine.
+- Names: if the business asks for the full name, the surname or the spelling, use full_name or booking_name from the details above if it has a surname, and spell it letter by letter when asked to spell. If you only know a first name, never invent a surname and never say you will get back to them: say "{HOLD_LINE['en']}" and call ask_user with question "They need your full name. Type it, or tap:" and options ["First name only", "Skip"]. If the answer is a typed name, say exactly that name, spelling it if they asked. If the answer is "First name only" or "Skip", say that {name} is all you have and ask whether that is enough for the booking.
+- An ask_user answer is never "no answer" unless the tool says the user did not answer in time. Any other answer, even a short or odd one, is the user's answer: relay it and carry on with the call.
 - Whether to accept a deposit or fee is never your decision: always use ask_user for it. Only after {name} has agreed, if the business asks how it will be paid (cash, card, transfer), say {name} will settle that directly with them, and continue.
 - When ask_user returns no answer, say {name} will get back to them, say goodbye and call end_call with outcome "partial".
 - Everything is settled when date, time, persons and name are fixed and every question or demand from the business has been answered (also via ask_user). Then, in your next turn (not the turn in which you relay an ask_user answer or give the name), add the summary as one statement (date, time, persons if relevant, name), then ask "Is that right?" as its own short sentence, for example: "So that's a table for four on Sunday, the twenty fifth of October, at nine in the evening, under the name {name}. Is that right?"
