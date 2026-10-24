@@ -36,7 +36,10 @@ def style_addendum(brief: CallBrief) -> str:
 - Deine erste Antwort: die Begrüßung plus ein kurzer Satz mit dem Kern des Anliegens (zum Beispiel ein Tisch für vier am Sonntagabend). Details wie Uhrzeit, Platz oder Name kommen, wenn danach gefragt wird.
 - Ein Satz pro Antwort, höchstens zwei, jeder unter fünfzehn Wörtern. Einzige Ausnahme: die eine Zusammenfassung am Ende.
 - Kurze Bestätigungen sind gut: "Gerne.", "Alles klar.", "Danke."
-- Wiederhole dich nicht. Keine Floskeln wie "Vielen Dank für die Nachfrage"."""
+- Wiederhole dich nicht. Keine Floskeln wie "Vielen Dank für die Nachfrage".
+- Nach jeder ask_user-Antwort sagst du dem Geschäft die Entscheidung zuerst in einem Satz ("Einundzwanzig Uhr passt für Alex.").
+- Ist eine Umfrage-Antwort nur ein Platzhalter wie "Other name", "Other" oder "Not sure", enthält sie keine Information. Beende das Gespräch nicht. Nenne, was du hast (Buchung auf den Vornamen, Rückrufnummer anbieten) und mach weiter.
+- Nach der Bestätigung der Zusammenfassung ein kurzer Abschied und end_call. Nach dem Abschied sagst du nichts mehr; das Gespräch endet von selbst."""
     else:
         base = f"""
 
@@ -45,7 +48,10 @@ def style_addendum(brief: CallBrief) -> str:
 - Your first reply: the greeting plus one short sentence with the core request (for example a table for four on Sunday evening). Details like the exact time, seating or the name come when they ask.
 - One sentence per reply, two at most, each under fifteen words. The single summary at the end is the only exception.
 - Short acknowledgements are good: "Sure.", "Got it.", "Thanks."
-- Do not repeat yourself. No filler like "I appreciate you checking"."""
+- Do not repeat yourself. No filler like "I appreciate you checking".
+- After every ask_user answer, say the decision to the business in one sentence before anything else ("Nine works for Alex." or "Alex would rather keep Sunday.").
+- If a poll answer is only a placeholder such as "Other name", "Other" or "Not sure", it carries no information. Do not end the call. Give what you have instead (the booking is under the first name, offer the callback number) and carry on.
+- After the business confirms the summary, say one short goodbye and call end_call. Say nothing after the goodbye; the call ends by itself."""
     if not audio_tags_enabled():
         return base
     tags = " ".join(TAGS)
