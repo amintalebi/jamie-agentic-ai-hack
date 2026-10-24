@@ -69,6 +69,7 @@ from livekit.agents import (  # noqa: E402
     FunctionToolsExecutedEvent,
     JobContext,
     TurnHandlingOptions,
+    UserInputTranscribedEvent,
     UserStateChangedEvent,
     cli,
     room_io,
@@ -254,11 +255,13 @@ def wire_events(session: AgentSession, ctx: JobContext, brief: CallBrief, transc
             state.user_spoke = True
             state.business_turns += 1
             transcript.add("business", text)
+            events.post_line("business", text)
             state.last_user_metrics = metrics
             log.info("business: %s", text)
         elif item.role == "assistant":
             state.turn += 1
             transcript.add("agent", text)
+            events.post_line("agent", text)
             u = state.last_user_metrics
 
             def f(d: dict, key: str) -> str:
@@ -271,6 +274,13 @@ def wire_events(session: AgentSession, ctx: JobContext, brief: CallBrief, transc
                 state.turn, f(u, "transcription_delay"), f(u, "end_of_turn_delay"),
                 f(metrics, "llm_node_ttft"), f(metrics, "tts_node_ttfb"), f(metrics, "e2e_latency"), text,
             )
+
+    @session.on("user_input_transcribed")
+    def _on_transcribed(ev: UserInputTranscribedEvent) -> None:
+        # What the business is saying right now, for the dashboard's live view. The final line
+        # arrives through conversation_item_added above.
+        if not ev.is_final:
+            events.post_line("business", ev.transcript, final=False)
 
     @session.on("function_tools_executed")
     def _on_tools(ev: FunctionToolsExecutedEvent) -> None:

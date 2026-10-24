@@ -13,6 +13,7 @@ import { Confetti, LiveDot, Logo, TypingDots, Waveform } from "@/components/bran
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { duration, statusLook, when, type Tone } from "./format";
+import { useLiveTranscript } from "./live";
 
 const tone = z.enum(["neutral", "live", "good", "bad", "warn"]);
 
@@ -416,32 +417,82 @@ export const TimelineItem = defineComponent({
   },
 });
 
+function Bubble({ speaker, text, partial }: { speaker: "agent" | "business"; text: string; partial?: boolean }) {
+  const agent = speaker === "agent";
+  return (
+    <div className={cn("flex max-w-[85%] items-end gap-2", agent ? "flex-row-reverse self-end" : "self-start")}>
+      {agent ? <Logo className="size-6" /> : (
+        <span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><Store className="size-3" /></span>
+      )}
+      <div className={cn("flex flex-col", agent && "items-end")}>
+        <span className="mx-2 mb-0.5 text-[11px] text-muted-foreground">{agent ? "Eve" : "Business"}</span>
+        <div
+          className={cn(
+            "rounded-[18px] px-3.5 py-2 text-[15px] leading-snug [overflow-wrap:anywhere]",
+            agent ? "rounded-br-[6px] bg-bubble-agent text-white" : "rounded-bl-[6px] bg-muted",
+            partial && "text-muted-foreground",
+          )}
+        >
+          {text}
+          {partial && <TypingDots className="ml-1.5 align-middle" />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const TranscriptLine = defineComponent({
   name: "TranscriptLine",
   description: "One turn of the call transcript",
   props: z.object({ speaker: z.enum(["agent", "business"]), text: z.string() }),
-  component: ({ props }) => {
-    const agent = props.speaker === "agent";
-    return (
-      <div className={cn("flex max-w-[85%] items-end gap-2", agent ? "flex-row-reverse self-end" : "self-start")}>
-        {agent ? <Logo className="size-6" /> : (
-          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><Store className="size-3" /></span>
-        )}
-        <div className={cn("flex flex-col", agent && "items-end")}>
-          <span className="mx-2 mb-0.5 text-[11px] text-muted-foreground">{agent ? "Eve" : "Business"}</span>
-          <div
-            className={cn(
-              "rounded-[18px] px-3.5 py-2 text-[15px] leading-snug [overflow-wrap:anywhere]",
-              agent ? "rounded-br-[6px] bg-bubble-agent text-white" : "rounded-bl-[6px] bg-muted",
-            )}
-          >
-            {props.text}
-          </div>
-        </div>
-      </div>
-    );
-  },
+  component: ({ props }) => <Bubble speaker={props.speaker} text={props.text} />,
 });
+
+export const LiveTranscript = defineComponent({
+  name: "LiveTranscript",
+  description: "Transcript of a call in progress, streamed from the server (SSE)",
+  props: z.object({ callId: z.string() }),
+  component: ({ props }) => <LiveTranscriptCard callId={props.callId} />,
+});
+
+function LiveTranscriptCard({ callId }: { callId: string }) {
+  const { lines, partial, ended, connected } = useLiveTranscript(callId);
+  const box = useRef<HTMLDivElement>(null);
+  const pinned = useRef(true); // follow new lines unless the user scrolled up to read
+
+  useEffect(() => {
+    const el = box.current;
+    if (el && pinned.current) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [lines.length, partial?.text]);
+
+  return (
+    <section className="live-border rounded-3xl border bg-card p-5 shadow-soft sm:p-6">
+      <h2 className="mb-4 flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+        {ended ? "Transcript" : <><LiveDot className="size-1.5 text-live" /> Live transcript</>}
+        {!ended && !connected && lines.length > 0 && (
+          <span className="ml-auto text-[12px] font-normal text-muted-foreground">Reconnecting…</span>
+        )}
+      </h2>
+      <div
+        ref={box}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
+        className="flex max-h-[55vh] flex-col gap-3 overflow-y-auto overscroll-contain"
+        aria-live="polite"
+      >
+        {lines.map((l, i) => <Bubble key={i} speaker={l.speaker} text={l.text} />)}
+        {partial && <Bubble speaker={partial.speaker} text={partial.text} partial />}
+        {!lines.length && !partial && (
+          <p className="flex items-center gap-2 text-[14px] text-muted-foreground">
+            {ended ? "Nothing was said." : <>Waiting for the first words <TypingDots /></>}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
 
 export const Section = defineComponent({
   name: "Section",
@@ -472,6 +523,7 @@ export const Page = defineComponent({
     subtitle: z.string().optional(),
     children: z.array(z.union([
       StatRow.ref, CallList.ref, Empty.ref, BackLink.ref, CallHeader.ref, PendingQuestion.ref, Note.ref, Section.ref,
+      LiveTranscript.ref,
     ])),
   }),
   component: ({ props, renderNode }) => {
@@ -496,7 +548,7 @@ export const Page = defineComponent({
 export const library = createLibrary({
   components: [
     Page, StatRow, Stat, CallList, CallRow, Empty, BackLink, CallHeader, PendingQuestion, Note, Section, KeyValue,
-    TimelineItem, TranscriptLine,
+    TimelineItem, TranscriptLine, LiveTranscript,
   ],
   root: "Page",
 });
