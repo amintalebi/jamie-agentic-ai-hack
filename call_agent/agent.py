@@ -247,11 +247,19 @@ def wire_events(session: AgentSession, ctx: JobContext, brief: CallBrief, transc
     def _on_disconnected(participant: rtc.RemoteParticipant) -> None:
         if participant.identity != sip_identity or state.ended:
             return
-        state.ended = True
         reason = rtc.DisconnectReason.Name(participant.disconnect_reason) if participant.disconnect_reason is not None else "unknown"
-        log.warning("business hung up (%s) before end_call", reason)
-        asyncio.create_task(post_final(events, brief, transcript, "partial", f"The business hung up ({reason})"))
-        asyncio.create_task(graceful_shutdown(ctx, "callee disconnected"))
+        log.warning("business hung up (%s)", reason)
+        asyncio.create_task(hangup_result(ctx, events, brief, transcript, state, reason))
+
+    async def hangup_result(ctx, events, brief, transcript, state, reason, grace_s: float = 3.0) -> None:
+        """Post a partial result unless end_call finishes within the grace period.
+        Call 4 on 24 Oct: the callee hung up while the agent said goodbye and both a partial and a
+        success result reached the server 3 ms apart."""
+        await asyncio.sleep(grace_s)
+        if not state.ended:
+            state.ended = True
+            await post_final(events, brief, transcript, "partial", f"The business hung up ({reason})")
+        await graceful_shutdown(ctx, "callee disconnected")
 
 
 async def post_final(events: EventsClient, brief: CallBrief, transcript: Transcript, outcome: str, text: str) -> None:
