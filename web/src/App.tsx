@@ -1,11 +1,12 @@
 import { Renderer } from "@openuidev/react-lang";
 import { REGEXP_ONLY_DIGITS } from "input-otp";
 import {
-  ArrowLeft, ArrowRight, ChevronDown, CircleAlert, Languages, Loader2, LogOut, MessageSquareText, PhoneCall, RefreshCw, Sparkles, Vote,
+  ArrowLeft, ArrowRight, ChevronDown, CircleAlert, Languages, Loader2, LogOut, MessageSquareText, Mic, PhoneCall, RefreshCw, Sparkles, Vote,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Aurora, Confetti, LiveDot, Wordmark } from "@/components/brand";
 import { PhoneDemo } from "@/components/phone-demo";
+import { VoiceSettings } from "@/components/voice-settings";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -50,6 +51,7 @@ export function App() {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [token, setTokenState] = useState(getToken);
   const [welcome, setWelcome] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const loggedIn = Boolean(token);
 
   function logout() {
@@ -128,10 +130,11 @@ export function App() {
           </a>
           <div className="flex items-center gap-2">
             {state.kind === "ok" && <SyncPill live={state.screen.live} stale={state.stale} at={state.at} />}
-            <AccountMenu onLogout={logout} />
+            <AccountMenu onLogout={logout} onVoice={() => setVoiceOpen(true)} />
           </div>
         </div>
       </header>
+      <VoiceSettings open={voiceOpen} onClose={() => setVoiceOpen(false)} onAuthError={logout} />
 
       <div className="mx-auto max-w-3xl px-4 pb-[calc(48px+env(safe-area-inset-bottom))] pt-6">
         {welcome && <Welcome onClose={() => setWelcome(false)} />}
@@ -177,7 +180,7 @@ function SyncPill({ live, stale, at }: { live: boolean; stale: boolean; at: Date
   );
 }
 
-function AccountMenu({ onLogout }: { onLogout: () => void }) {
+function AccountMenu({ onLogout, onVoice }: { onLogout: () => void; onVoice: () => void }) {
   const last4 = getPhone().replace(/\D/g, "").slice(-4);
   return (
     <DropdownMenu>
@@ -196,6 +199,9 @@ function AccountMenu({ onLogout }: { onLogout: () => void }) {
           <div className="font-medium tabular-nums">{last4 ? `•••• ${last4}` : "you"}</div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onVoice}>
+          <Mic /> Call voice
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={onLogout} className="text-bad focus:text-bad">
           <LogOut className="text-bad" /> Sign out
         </DropdownMenuItem>

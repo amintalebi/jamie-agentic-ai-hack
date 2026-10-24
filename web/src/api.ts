@@ -113,3 +113,40 @@ export async function fetchScreen(path: string, signal?: AbortSignal): Promise<S
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
+
+export type VoiceInfo = {
+  voice_id: string | null;
+  voice_name: string | null;
+  configured: boolean;
+};
+
+function authHeaders(): HeadersInit {
+  return { authorization: `Bearer ${getToken()}` };
+}
+
+async function readApiError(res: Response): Promise<string> {
+  const data = await res.json().catch(() => ({}));
+  return typeof data.detail === "string" ? data.detail : `${res.status} ${res.statusText}`;
+}
+
+export async function fetchVoice(signal?: AbortSignal): Promise<VoiceInfo> {
+  const res = await fetch("/api/voices", { signal, headers: authHeaders() });
+  if (res.status === 401) throw new AuthError("Session expired, log in again");
+  if (!res.ok) throw new ApiError(await readApiError(res));
+  return res.json();
+}
+
+export async function uploadVoice(file: File): Promise<VoiceInfo> {
+  const body = new FormData();
+  body.append("sample", file);
+  const res = await fetch("/api/voices", { method: "POST", headers: authHeaders(), body });
+  if (res.status === 401) throw new AuthError("Session expired, log in again");
+  if (!res.ok) throw new ApiError(await readApiError(res));
+  return res.json();
+}
+
+export async function deleteVoice(): Promise<void> {
+  const res = await fetch("/api/voices", { method: "DELETE", headers: authHeaders() });
+  if (res.status === 401) throw new AuthError("Session expired, log in again");
+  if (!res.ok) throw new ApiError(await readApiError(res));
+}

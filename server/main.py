@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 
-from server import auth, calls, dashboard, db, gateway, history, settings, users
+from server import auth, calls, dashboard, db, gateway, history, settings, users, voices
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("server")
@@ -31,6 +31,7 @@ app.include_router(gateway.router)
 app.include_router(calls.router)
 app.include_router(dashboard.router)
 app.include_router(auth.router)
+app.include_router(voices.router)
 if settings.MESSENGER_MODE == "fake":
     app.include_router(gateway.dev_router)
 dashboard.mount_app(app)  # the PWA at /app/, if web/dist is built
