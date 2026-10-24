@@ -7,7 +7,7 @@ Run (reads .env at the repo root):
 Dispatch (server/calls.py does this; scripts/dial_test.py does it for the smoke test):
     lk dispatch create --new-room --agent-name jamie-call-agent --metadata "$(cat fixtures/brief_italian.json)"
 
-Pipeline: Reson8 STT (server-side turn detection) -> Claude Haiku -> ElevenLabs TTS, interruptions on.
+Pipeline: ElevenLabs Scribe realtime STT (VAD turn detection; Reson8 behind CALL_STT) -> Claude Haiku -> ElevenLabs TTS, interruptions on.
 The callee speaks first. The prompt from prompts.py (role E) makes the LLM answer with the opening
 line and the request. If the callee stays silent after pickup, we open after CALL_SILENCE_OPEN_S.
 
@@ -21,7 +21,7 @@ Env, all read after load_dotenv:
   ELEVENLABS_VOICE_ID_EN     optional; falls back to the DE voice
   CALL_AMD                   1 = answering machine detection before speaking; default 0 for the demo
   CALL_PREEMPTIVE            1 = start the LLM on the eager transcript (lower latency); default 1
-  CALL_STT                   reson8 (default) or elevenlabs (Scribe realtime, VAD turn detection)
+  CALL_STT                   elevenlabs (default: Scribe v2 realtime, VAD turn detection) or reson8 (STT turn detection)
   CALL_DIAL_TIMEOUT_S        default 45
   CALL_SILENCE_OPEN_S        default 3; the agent opens after this much silence, or as soon as the callee pauses
   RESON8_EAGER_TURN_PROBABILITY, RESON8_FINAL_TURN_PROBABILITY   optional Reson8 turn-detection thresholds (0..1)
@@ -149,17 +149,20 @@ def build_session(brief: CallBrief) -> AgentSession:
         tts_kwargs["voice_id"] = voice
     else:
         log.warning("ELEVENLABS_VOICE_ID_DE not set, using the plugin's default English voice")
-    if os.getenv("CALL_STT", "reson8").lower() == "elevenlabs":
-        # Fallback STT: ElevenLabs Scribe realtime. No server-side turn detection, so the bundled VAD decides turns.
-        stt = elevenlabs.STT(api_key=os.environ["ELEVENLABS_API_KEY"], use_realtime=True, language_code=brief.language)
-        turn_detection = "vad"
-    else:
-        # Reson8 streams with server-side turn detection. Measured 24 Oct (9 s German sample): eager
-        # end-of-turn transcript ~0.4 s after the speaker stops, final ~1.0 to 1.4 s after.
+    if os.getenv("CALL_STT", "elevenlabs").lower() == "reson8":
+        # Reson8 streams with server-side turn detection. On a clean 9 s sample the final came ~1 s after
+        # the speaker stopped, but on three real phone calls (24 Oct) it closed the callee's turn only
+        # after 10 to 16 s of pauses, so the agent sat silent. Kept behind CALL_STT=reson8.
         knobs = {k: float(v) for k, v in (("eager_turn_probability", os.getenv("RESON8_EAGER_TURN_PROBABILITY")),
                                            ("final_turn_probability", os.getenv("RESON8_FINAL_TURN_PROBABILITY"))) if v}
         stt = reson8.STT(language=brief.language, **knobs)
         turn_detection = "stt"
+    else:
+        # Default: ElevenLabs Scribe v2 realtime. The bundled Silero VAD decides the end of turn, LiveKit
+        # flushes the STT (manual_flush) and the final arrived 0.3 to 0.8 s later in tests, so a turn
+        # closes about a second after the callee stops talking, independent of line noise.
+        stt = elevenlabs.STT(api_key=os.environ["ELEVENLABS_API_KEY"], model="scribe_v2_realtime", language_code=brief.language)
+        turn_detection = "vad"
     return AgentSession(
         stt=stt,
         llm=CallLLM(model=call_llm_model(), max_tokens=200),  # no temperature: Haiku 5.5 rejects it with a 400
