@@ -167,10 +167,19 @@ class CallLLM(anthropic.LLM):
         return super().chat(extra_kwargs=extra, **kwargs)
 
 
-def build_session(brief: CallBrief) -> AgentSession:
-    voice = os.getenv("ELEVENLABS_VOICE_ID_DE") or ""
+def resolve_voice_id(brief: CallBrief) -> str:
+    """Per-user clone from the brief first, then the env default for this language."""
+    custom = (brief.user_facts or {}).get("voice_id", "").strip()
+    if custom:
+        log.info("using cloned voice …%s for this call", custom[-4:])
+        return custom
     if brief.language == "en" and os.getenv("ELEVENLABS_VOICE_ID_EN"):
-        voice = os.environ["ELEVENLABS_VOICE_ID_EN"]
+        return os.environ["ELEVENLABS_VOICE_ID_EN"]
+    return os.getenv("ELEVENLABS_VOICE_ID_DE") or ""
+
+
+def build_session(brief: CallBrief) -> AgentSession:
+    voice = resolve_voice_id(brief)
     tts_kwargs = dict(
         api_key=os.environ["ELEVENLABS_API_KEY"],
         model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_v4_turbo"),  # measured 24 Oct: first audio 0.4 to 0.9 s vs 0.8 to 1.0 s for flash v2.5
