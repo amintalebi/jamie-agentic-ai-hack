@@ -13,14 +13,17 @@ WORKDIR /app
 COPY call_agent/requirements.txt call_agent/requirements.txt
 # livekit-plugins-noise-cancellation is imported by agent.py (optional at runtime, see the try/except);
 # listed here rather than in E's requirements.txt. livekit-api is pulled in by livekit-agents.
-RUN pip install --no-cache-dir -r call_agent/requirements.txt livekit-plugins-noise-cancellation
+# livekit-plugins-turn-detector: the end-of-turn model behind CALL_TURN_DETECTOR=1 (off by default).
+RUN pip install --no-cache-dir -r call_agent/requirements.txt livekit-plugins-noise-cancellation \
+    livekit-plugins-turn-detector==1.8.9
 
 COPY common/ common/
 COPY call_agent/ call_agent/
 # fixtures/ is only for console mode and is excluded by the root .dockerignore; not copied.
 
-# Plugin model files (ElevenLabs) so the first call does not download them.
-RUN python call_agent/agent.py download-files
+# Plugin model files (ElevenLabs, and the turn detector's ONNX model) so the first call does not download them.
+# CALL_TURN_DETECTOR=1 here only makes download-files fetch that model; at runtime it stays off unless set.
+RUN CALL_TURN_DETECTOR=1 python call_agent/agent.py download-files
 
 # Production mode: no dev reload, connects to LIVEKIT_URL and waits for dispatches.
 CMD ["python", "call_agent/agent.py", "start"]
