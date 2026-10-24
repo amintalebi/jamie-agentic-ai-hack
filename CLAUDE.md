@@ -106,6 +106,8 @@ Actual layout differs from the sketch above in two ways:
 ### Dashboard (call monitoring)
 `server/history.py` records every call and its timeline (Postgres tables `calls` and `call_events`, created at startup; in memory without `DATABASE_URL`). Writes are queued in the background (in order per call, 10 s timeout) and never raise, so a slow or broken database cannot delay or break a live call. Calls still live at startup are closed as lost, and a live call far past its `max_call_seconds` shows as "lost". `server/dashboard.py` turns that history into screens written in OpenUI Lang (https://openui.com), built in code with no LLM, and serves them at `/api/dashboard/*` for the phone number in the bearer token from `/api/auth/verify`. `web/` registers the matching components (`web/src/library.tsx`) and renders them with OpenUI's `<Renderer>`, refreshing every 2 s while a call is live.
 
+Styling is Tailwind v4 plus shadcn/ui (`web/components.json`; primitives in `web/src/components/ui/`, add more with `cd web && npx shadcn@4.22.1 add <name>`). Theme tokens, brand gradient and animations live in `web/src/index.css`; dark mode follows the OS. Brand pieces (logo, aurora, waveform, confetti) are in `web/src/components/brand.tsx`, and the animated iMessage demo on the sign-in screen is `web/src/components/phone-demo.tsx`.
+
 OpenUI Lang arguments are **positional, in Zod key order**. When you change a component, change the Python call in `dashboard.py` and the schema in `library.tsx` together, then run `npm run fixtures && npm test`. Props the server may send as `null` must be `.optional()` (OpenUI rejects `null` for required props, even `.nullable()` ones).
 
 ### Adapters and fakes
@@ -257,7 +259,7 @@ When a `result` arrives: send the user a 2 to 3 line summary written by Sonnet f
 Fallbacks if behind: drop Mem0; drop voice notes (text only); drop mid-call polls (agent accepts the closest time within 30 min).
 
 ## Conventions
-- Keep it boring: FastAPI, Pydantic, httpx, sqlite3, the official SDKs. No new frameworks.
+- Keep it boring: FastAPI, Pydantic, httpx, sqlite3, the official SDKs. No new frameworks. Exception, agreed for the demo: the PWA (`web/`) uses Tailwind v4 and shadcn/ui on top of React and OpenUI; keep new UI on those rather than adding more.
 - Every external call gets a timeout and a log line. No silent failures: on errors, text the user something sensible.
 - Never log full API keys or full phone numbers (mask all but the last 4 digits).
 - Only ever dial numbers in `ALLOWED_CALL_NUMBERS`.
