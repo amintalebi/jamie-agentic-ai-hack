@@ -28,5 +28,14 @@ services:
       db:
         condition: service_healthy
 
+  web:
+    build: ./web          # dashboard PWA at http://localhost:8080/app/, /api proxied to server
+    environment:
+      API_URL: http://server:8000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - server
+
 volumes:
   pgdata:

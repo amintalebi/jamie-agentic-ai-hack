@@ -9,7 +9,7 @@ Hackathon project (Agentic AI Hack, Berlin, Sat 24 Oct 2026). Hard deadline: com
 ## Commands
 
 ```
-docker compose up --build              # Postgres (pgvector) on :5432 + server on :8000
+docker compose up --build              # Postgres (pgvector) :5432, server :8000, dashboard PWA :8080/app/
 curl localhost:8000/health             # checks the DB connection and reports the pgvector version
 docker compose down -v                 # stop and wipe the DB volume (re-runs db/init/*.sql next start)
 ```
@@ -35,9 +35,9 @@ cd web && npm install
 npm run dev          # http://localhost:5173/app/, proxies /api to the server on :8000
 npm test             # parses and renders the server's sample screens
 npm run fixtures     # regenerate those samples after changing server/dashboard.py
-npm run build        # web/dist, served by the server at /app/
+npm run build        # web/dist (a local `uvicorn` also serves it at :8000/app/ if built)
 ```
-Open `http://localhost:8000/app/#token=<DASHBOARD_TOKEN>` once; the token is kept in localStorage.
+In Docker the PWA is its own image (`web/Dockerfile`: Node build stage, then non-root nginx on 8080 serving precompressed files and proxying `/api/` to `API_URL`). Open `http://localhost:8080/app/#token=<DASHBOARD_TOKEN>` once; the token is kept in localStorage.
 
 There are no Python tests or lint config yet.
 
