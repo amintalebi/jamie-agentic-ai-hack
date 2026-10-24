@@ -62,4 +62,5 @@ Code is still being written. These steps will be filled in as components land.
 ## Docs
 
 - [Roadmap](docs/roadmap.md)
+- [Team split](docs/team-split.md)
 - [Project spec and conventions](CLAUDE.md)
