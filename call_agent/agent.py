@@ -22,6 +22,9 @@ Env, all read after load_dotenv:
   CALL_AMD                   1 = answering machine detection before speaking; default 0 for the demo
   CALL_PREEMPTIVE            1 = start the LLM on the eager transcript (lower latency); default 1
   CALL_NOISE_CANCEL          1 = LiveKit Cloud telephony noise cancellation on the callee's audio; default 1
+  CALL_ENDPOINT_MIN_S        silence before a callee turn closes; default 2.0 (0.5 chopped hesitant speakers)
+  CALL_GOODBYE_WAIT_S        after our goodbye, wait this long for the business to say theirs before hanging up; default 3
+  CALL_INTERRUPT_MIN_S, CALL_INTERRUPT_MIN_WORDS   speech needed to interrupt the agent; default 0.7 s and 2 words
   CALL_AUDIO_TAGS            1 = let the LLM prefix replies with an ElevenLabs tone tag such as [warm]; default 0
   ELEVENLABS_STABILITY       optional 0..1 voice stability (0.5 = natural); similarity fixed at 0.75
   CALL_STT                   elevenlabs (default: Scribe v2 realtime, VAD turn detection) or reson8 (STT turn detection)
@@ -76,7 +79,9 @@ from contracts_local import CallBrief, CallEvent  # noqa: E402  TODO(hack): swit
 from events import EventsClient, mask_phone  # noqa: E402
 from prompts import build_instructions, opening_line  # noqa: E402
 from style import strip_tags, style_addendum  # noqa: E402
-from tools import Transcript, make_tools  # noqa: E402
+from tools import CallTools, Transcript, make_tools  # noqa: E402
+from typing import Literal  # noqa: E402
+from livekit.agents import RunContext, function_tool  # noqa: E402
 
 AGENT_NAME = os.getenv("CALL_AGENT_NAME") or "jamie-call-agent"  # same variable the server uses to dispatch
 log = logging.getLogger("call_agent")
@@ -183,6 +188,13 @@ def build_session(brief: CallBrief) -> AgentSession:
         # preemptive_generation starts the LLM on the eager transcript to cut latency.
         turn_handling=TurnHandlingOptions(
             turn_detection=turn_detection,
+            # First server-driven call (24 Oct, 16:49): a hesitant speaker ("Ähm, ja, es--", "Um ...",
+            # "20 Uhr.") was chopped into a turn at every 0.5 s pause, and a single "G-" interrupted the
+            # agent. Wait longer before closing a turn and require a real utterance to interrupt.
+            endpointing={"min_delay": float(os.getenv("CALL_ENDPOINT_MIN_S", "2.0")),
+                         "max_delay": float(os.getenv("CALL_ENDPOINT_MAX_S", "3.0"))},
+            interruption={"min_duration": float(os.getenv("CALL_INTERRUPT_MIN_S", "0.7")),
+                          "min_words": int(os.getenv("CALL_INTERRUPT_MIN_WORDS", "2"))},
             preemptive_generation={"enabled": env_flag("CALL_PREEMPTIVE", True)},
         ),
     )
@@ -342,6 +354,41 @@ async def hard_stop(ctx: JobContext, session: AgentSession, events: EventsClient
     await graceful_shutdown(ctx, "max_call_seconds")
 
 
+def build_tools(brief: CallBrief, events: EventsClient, transcript: Transcript, state: CallState) -> list:
+    """E's ask_user as is; E's end_call wrapped so the call is not cut before the business says goodbye.
+
+    First server-driven call (24 Oct): the agent hung up the instant its own goodbye finished. Now it
+    waits up to CALL_GOODBYE_WAIT_S for the callee to speak and pause (their goodbye), then hangs up."""
+    e_ask_user, _e_end_call = make_tools(brief, events, transcript)
+    impl = CallTools(brief, events, transcript)
+    goodbye_wait = float(os.getenv("CALL_GOODBYE_WAIT_S", "3"))
+
+    @function_tool
+    async def end_call(
+        context: RunContext,
+        outcome: Literal["success", "partial", "failed"],
+        details: dict[str, str],
+    ) -> str:
+        """End the call after saying goodbye. Report the outcome and the agreed details.
+
+        Args:
+            outcome: success, partial or failed.
+            details: Agreed details, e.g. {"date": "25 Oct", "time": "21:00", "persons": "4", "name": "Sina"}.
+        """
+        context.disallow_interruptions()  # the business talking over the goodbye must not cut it off (as in E's end_call)
+        await context.wait_for_playout()  # our goodbye has been heard
+        state.callee_paused.clear()
+        try:  # let the business say goodbye too
+            await asyncio.wait_for(state.callee_paused.wait(), timeout=goodbye_wait)
+            log.info("business said goodbye, hanging up")
+        except asyncio.TimeoutError:
+            log.info("no goodbye from the business within %.0fs, hanging up", goodbye_wait)
+        state.ended = True
+        return await impl.end_call(outcome, details, context)
+
+    return [e_ask_user, end_call]
+
+
 server = AgentServer()
 
 
@@ -372,7 +419,7 @@ async def call_session(ctx: JobContext) -> None:
     state = CallState()
     session = build_session(brief)
     instructions = hello_instructions(brief) if mode == "hello" else build_instructions(brief) + style_addendum(brief)
-    agent = Agent(instructions=instructions, tools=make_tools(brief, events, transcript))
+    agent = Agent(instructions=instructions, tools=build_tools(brief, events, transcript, state))
     sip_identity = f"sip-{brief.call_id}"
     wire_events(session, ctx, brief, transcript, state, events, sip_identity)
 
