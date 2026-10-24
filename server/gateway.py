@@ -341,6 +341,12 @@ async def route_inbound(msg: InboundMessage) -> None:
                 text = await stt.transcribe(audio)
             else:
                 text = msg.text
+            # A call on hold is waiting for this user: a typed or spoken reply answers it
+            # (open questions like "what's your surname?" cannot be answered with a poll tap).
+            call_id = calls.pending_question(msg.user_id) if msg.vote is None and text else None
+            if call_id:
+                await calls.resolve_answer(call_id, text.strip())
+                return
             await orchestrator.handle_message(msg.user_id, text)
         finally:
             await _typing(msg.user_id, False)

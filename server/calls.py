@@ -16,7 +16,7 @@ from livekit import api as lk_api
 
 from common.contracts import CallBrief, CallEvent
 from common.masking import mask_phone, mask_text
-from server import gateway, history, orchestrator, settings
+from server import gateway, history, memory, orchestrator, settings
 
 log = logging.getLogger("server.calls")
 router = APIRouter()
@@ -183,11 +183,18 @@ async def resolve_answer(call_id: str, answer: str) -> None:
         log.warning("answer for call %s with no pending question, ignored", call_id)
         return
     # TODO(hack): if the agent already stopped waiting, tell the user it is too late.
+    question = state.question
     state.question = None
     state.answer = answer
     state.answer_ready.set()
     log.info("answer for call %s: %r", call_id, mask_text(answer))
     history.answer_received(call_id, answer)
+    # A typed answer to "they need your full name" is worth keeping: the next call will not ask again.
+    if "full name" in question.text.lower() and answer.lower() not in [o.lower() for o in question.options or []]:
+        try:
+            await memory.remember(state.brief.user_id, "full_name", answer)
+        except Exception:
+            log.exception("could not remember full_name for call %s", call_id)
 
 
 def apply_event(event: CallEvent) -> None:
