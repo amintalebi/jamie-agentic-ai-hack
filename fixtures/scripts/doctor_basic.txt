@@ -1,0 +1,14 @@
+# No allowed decisions: any offered date must go to ask_user.
+# brief: fixtures/brief_doctor.json
+B: Praxis Doktor Weber, guten Tag?
+# expect no ask_user
+B: Wir hätten am Donnerstag um 9 Uhr 30 einen Termin frei.
+# expect ask_user
+U: Yes
+B: Sind Sie gesetzlich oder privat versichert?
+# expect no ask_user
+# expect say matches gesetzlich
+B: Gut, dann trage ich Sina für Donnerstag halb zehn ein. Bitte die Versichertenkarte mitbringen.
+# expect no ask_user
+B: Wunderbar, bis Donnerstag, auf Wiederhören!
+# expect end_call outcome=success

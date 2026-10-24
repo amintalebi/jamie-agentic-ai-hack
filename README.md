@@ -66,6 +66,8 @@ Full setup, as components land:
 3. Expose the server with ngrok and put the URL in `SERVER_PUBLIC_URL`.
 4. Start `server/` and `call_agent/`.
 
+By default the call agent does not announce itself as an AI in its opening line (the demo calls our own teammates). It never claims to be human and says so truthfully if asked. Set `DISCLOSE_AI=true` to make it introduce itself as a digital assistant up front.
+
 ## Docs
 
 - [Roadmap](docs/roadmap.md)

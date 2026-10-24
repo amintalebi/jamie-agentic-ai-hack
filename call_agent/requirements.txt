@@ -1,0 +1,11 @@
+anthropic
+httpx
+pydantic
+python-dotenv
+livekit-agents
+livekit-plugins-reson8
+livekit-plugins-elevenlabs
+livekit-plugins-anthropic
+# dev only: scripts/fake_server.py
+fastapi
+uvicorn

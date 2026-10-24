@@ -1,0 +1,22 @@
+# The 6-line script from docs/role-e-call-conversation.md. Line 6 (computer question)
+# runs before the goodbye because the goodbye ends the call.
+# brief: fixtures/brief_italian.json
+B: Ristorante Roma, guten Tag?
+# expect no ask_user
+# expect say matches vier Personen
+B: Um 20 Uhr ist leider voll, 21 Uhr?
+# expect ask_user
+# expect say matches Einen Moment bitte, ich frage kurz nach\.
+U: Yes
+B: Auf welchen Namen?
+# expect no ask_user
+# expect say matches Sina
+B: Wir brauchen 10 Euro Anzahlung pro Person.
+# expect ask_user
+U: Yes
+B: Moment, bin ich hier mit einem Computer?
+# expect no ask_user
+# expect say matches \bja\b
+B: Alles klar, bis morgen!
+# expect no ask_user
+# expect end_call outcome=success
