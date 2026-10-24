@@ -1,7 +1,7 @@
 import { useId } from "react";
 import { cn } from "@/lib/utils";
 
-/** Jamie's mark: a chat bubble holding a sound wave, on the brand gradient. */
+/** Eve's mark: a chat bubble holding a sound wave, on the brand gradient. */
 export function Logo({ className }: { className?: string }) {
   // One gradient id per instance: duplicate ids break url(#...) when the first copy is hidden.
   const gid = `jw${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
@@ -33,7 +33,7 @@ export function Wordmark({ className }: { className?: string }) {
   return (
     <span className={cn("inline-flex items-center gap-2.5 text-[17px] font-semibold tracking-tight", className)}>
       <Logo />
-      Jamie
+      Eve
     </span>
   );
 }

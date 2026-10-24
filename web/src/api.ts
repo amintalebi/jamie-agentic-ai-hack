@@ -28,14 +28,6 @@ export function clearPhone(): void {
 
 let memoryPhone = "";
 
-/** Normalise a phone string loosely (keep digits and a leading +). */
-export function normalisePhone(raw: string): string {
-  const s = raw.trim().replace(/[\s\-().]/g, "");
-  if (!s) return "";
-  if (s.startsWith("+")) return "+" + s.slice(1).replace(/\D/g, "");
-  return "+" + s.replace(/\D/g, "");
-}
-
 const TOKEN_KEY = "jamie.token";
 let memoryToken = "";
 

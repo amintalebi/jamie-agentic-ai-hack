@@ -1,7 +1,7 @@
 {
-  "name": "Jamie Calls",
-  "short_name": "Jamie",
-  "description": "Live monitor for calls Jamie places for you.",
+  "name": "Eve Calls",
+  "short_name": "Eve",
+  "description": "Live monitor for calls Eve places for you.",
   "start_url": "/app/",
   "scope": "/app/",
   "display": "standalone",

@@ -108,7 +108,7 @@ def calls_screen(calls: list[dict], stats: dict[str, int]) -> tuple[str, bool]:
             for c in calls
         ])
     else:
-        body = p.add("Empty", "No calls yet. Ask Jamie to call somewhere and it shows up here live.")
+        body = p.add("Empty", "No calls yet. Ask Eve to call somewhere and it shows up here live.")
     return p.render("Page", "Calls", "Live call monitor", [stat_row, body]), any(_is_live(c) for c in calls)
 
 

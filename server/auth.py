@@ -250,7 +250,7 @@ class VerifyRequest(BaseModel):
 def sms_body(code: str) -> str:
     """The login SMS. With APP_DOMAIN set, the last line "@host #code" binds the code to the PWA's
     origin: iOS Safari offers it above the keyboard and Android Chrome fills it via WebOTP."""
-    body = f"Your Jamie login code is {code}. It expires in 5 minutes."
+    body = f"Your Eve login code is {code}. It expires in 5 minutes."
     domain = settings.APP_DOMAIN.removeprefix("https://").removeprefix("http://").split("/")[0]
     return f"{body}\n\n@{domain} #{code}" if domain else body
 

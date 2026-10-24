@@ -296,7 +296,7 @@ def build_ics(title: str, start: datetime, duration_minutes: int = 120, location
     def esc(text: str) -> str:
         return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Jamie//iMessage assistant//EN", "METHOD:PUBLISH",
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Eve//iMessage assistant//EN", "METHOD:PUBLISH",
              "BEGIN:VEVENT", f"UID:{uuid.uuid4()}@jamie-agentic-hack.app",
              f"DTSTAMP:{datetime.now(timezone.utc):{fmt}}", f"DTSTART:{begin:{fmt}}", f"DTEND:{end:{fmt}}",
              f"SUMMARY:{esc(title)}"]

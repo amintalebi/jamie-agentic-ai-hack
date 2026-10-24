@@ -1,6 +1,6 @@
 // Service worker: makes the dashboard installable and lets the shell open offline.
 // API calls are never cached: monitoring data must be live.
-const CACHE = "jamie-shell-v2";
+const CACHE = "jamie-shell-v3";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icons/icon-192.png"];
 
 self.addEventListener("install", (event) => {

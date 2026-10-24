@@ -2,7 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# Call-for-me iMessage agent ("Jamie")
+# Call-for-me iMessage agent ("Eve")
+
+The assistant is called Eve in everything users see. "Jamie" survives only in the domain (`jamie-agentic-hack.app`), the repo name and internal identifiers (LiveKit agent name `jamie-call-agent`, DB user, Docker images, localStorage keys); do not rename those, it breaks deploys and signs everyone out.
 
 Hackathon project (Agentic AI Hack, Berlin, Sat 24 Oct 2026). Hard deadline: competition opt-in at 19:00, live demo at 20:00. Optimise for a demo that works reliably, not for completeness. When in doubt, pick the simplest thing that works and leave a `TODO(hack)` comment.
 

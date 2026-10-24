@@ -28,7 +28,7 @@ export function PhoneDemo({ className }: { className?: string }) {
   const at = (s: number) => step >= s;
 
   return (
-    <div className={cn("relative mx-auto w-[300px] select-none", className)} aria-label="Example conversation with Jamie">
+    <div className={cn("relative mx-auto w-[300px] select-none", className)} aria-label="Example conversation with Eve">
       {/* glow behind the device */}
       <div aria-hidden className="bg-brand absolute inset-6 -z-10 rounded-[56px] opacity-40 blur-3xl" />
       <div className="rounded-[52px] bg-neutral-900 p-[10px] shadow-lift ring-1 ring-black/10 dark:bg-neutral-800 dark:ring-white/10">
@@ -52,7 +52,7 @@ export function PhoneDemo({ className }: { className?: string }) {
             <ChevronLeft className="size-6 text-imessage" />
             <div className="flex flex-col items-center gap-0.5">
               <Logo className="size-9" />
-              <span className="text-[11px] font-medium">Jamie</span>
+              <span className="text-[11px] font-medium">Eve</span>
             </div>
             <Video className="size-5 text-imessage" />
           </div>
@@ -158,7 +158,7 @@ function CallCard({ ended }: { ended: boolean }) {
       <div className="min-w-0 flex-1">
         <div className="font-semibold">Trattoria Da Enzo</div>
         <div className="flex items-center gap-1.5 text-[11px] text-neutral-500">
-          {ended ? "Call ended · 1:12" : (<><LiveDot className="text-[#30d158]" /> Jamie is on the call</>)}
+          {ended ? "Call ended · 1:12" : (<><LiveDot className="text-[#30d158]" /> Eve is on the call</>)}
         </div>
       </div>
       {!ended && <Waveform bars={5} className="text-[#30d158]" />}

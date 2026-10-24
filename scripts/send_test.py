@@ -29,7 +29,7 @@ async def main() -> None:
         sys.exit("LINQ_API_KEY is not set in .env")
 
     linq = LinqMessenger()
-    await linq.send_text(args.to, "Hi, this is Jamie. Gateway test.")
+    await linq.send_text(args.to, "Hi, this is Eve. Gateway test.")
     print(f"text sent to {mask_phone(args.to)}")
     if not args.text_only:
         poll_id = await linq.send_poll(args.to, "Inside or outside?", ["Inside", "Outside"])
