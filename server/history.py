@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS call_events (
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS call_events_call_id ON call_events (call_id, id);
+CREATE TABLE IF NOT EXISTS call_recordings (
+    call_id      text PRIMARY KEY REFERENCES calls (call_id) ON DELETE CASCADE,
+    content_type text NOT NULL,
+    audio        bytea NOT NULL,          -- two-track OGG from the call agent: callee and agent
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
 """
 
 LOST_TEXT = "Lost contact: the server restarted during the call"
@@ -76,12 +82,15 @@ class HistoryStore(Protocol):
     async def list_calls(self, user_id: str, limit: int = 50) -> list[dict]: ...
     async def stats(self, user_id: str, since: datetime) -> dict[str, int]: ...
     async def get_call(self, call_id: str, user_id: str = "") -> dict | None: ...
+    async def save_recording(self, call_id: str, content_type: str, audio: bytes) -> None: ...
+    async def get_recording(self, call_id: str) -> tuple[str, bytes] | None: ...
     async def delete_user(self, user_id: str) -> int: ...
 
 
 class MemoryHistory:
     def __init__(self) -> None:
         self.calls: dict[str, dict] = {}
+        self.recordings: dict[str, tuple[str, bytes]] = {}
 
     async def ensure_schema(self) -> None:
         pass
@@ -135,6 +144,12 @@ class MemoryHistory:
             return None
         return call
 
+    async def save_recording(self, call_id: str, content_type: str, audio: bytes) -> None:
+        if call_id in self.calls:
+            self.recordings[call_id] = (content_type, audio)
+
+    async def get_recording(self, call_id: str) -> tuple[str, bytes] | None:
+        return self.recordings.get(call_id)
     async def delete_user(self, user_id: str) -> int:
         ids = [cid for cid, c in self.calls.items() if c["user_id"] == user_id]
         for cid in ids:
@@ -221,6 +236,20 @@ class PostgresHistory:
             call["events"] = await cur.fetchall()
             return call
 
+    async def save_recording(self, call_id: str, content_type: str, audio: bytes) -> None:
+        async with db.pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO call_recordings (call_id, content_type, audio) VALUES (%s, %s, %s) "
+                "ON CONFLICT (call_id) DO UPDATE SET content_type = EXCLUDED.content_type, audio = EXCLUDED.audio, "
+                "created_at = now()",
+                (call_id, content_type, audio),
+            )
+
+    async def get_recording(self, call_id: str) -> tuple[str, bytes] | None:
+        async with db.pool.connection() as conn:
+            cur = await conn.execute("SELECT content_type, audio FROM call_recordings WHERE call_id = %s", (call_id,))
+            row = await cur.fetchone()
+        return (row[0], bytes(row[1])) if row else None
     async def delete_user(self, user_id: str) -> int:
         async with db.pool.connection() as conn:  # call_events go with their call (ON DELETE CASCADE)
             cur = await conn.execute("DELETE FROM calls WHERE user_id = %s", (user_id,))
@@ -228,6 +257,7 @@ class PostgresHistory:
 
 
 store: HistoryStore = MemoryHistory()
+
 
 
 async def init() -> None:
@@ -308,6 +338,14 @@ async def get_call(call_id: str, user_id: str = "") -> dict | None:
     return await store.get_call(call_id, user_id)
 
 
+async def save_recording(call_id: str, content_type: str, audio: bytes) -> None:
+    """Store the call agent's two-track recording (awaited, not queued: the file is the whole point)."""
+    await store.save_recording(call_id, content_type, audio)
+    note(call_id, "recording", f"Recording saved ({len(audio) // 1024} KB)")
+
+
+async def get_recording(call_id: str) -> tuple[str, bytes] | None:
+    return await store.get_recording(call_id)
 async def delete_user(user_id: str) -> int:
     """Account deletion: drop the user's calls and their timelines. Returns how many calls."""
     if not user_id:  # "" means "all users" in the reads above; never here
