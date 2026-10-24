@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at  timestamptz NOT NULL DEFAULT now(),
     activated_at   timestamptz
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_revoked_at timestamptz;
 """
 
 
@@ -42,6 +43,9 @@ class UserStore(Protocol):
     async def ensure_schema(self) -> None: ...
     async def login(self, phone: str) -> dict: ...
     async def mark_activated(self, phone: str) -> None: ...
+    async def get(self, phone: str) -> dict | None: ...
+    async def revoke_sessions(self, phone: str) -> None: ...
+    async def delete(self, phone: str) -> None: ...
 
 
 class MemoryUsers:
@@ -65,6 +69,17 @@ class MemoryUsers:
         if phone in self.rows:
             self.rows[phone]["activated_at"] = _now()
 
+    async def get(self, phone: str) -> dict | None:
+        row = self.rows.get(phone)
+        return dict(row) if row else None
+
+    async def revoke_sessions(self, phone: str) -> None:
+        if phone in self.rows:
+            self.rows[phone]["sessions_revoked_at"] = _now()
+
+    async def delete(self, phone: str) -> None:
+        self.rows.pop(phone, None)
+
 
 class PostgresUsers:
     async def ensure_schema(self) -> None:
@@ -87,6 +102,21 @@ class PostgresUsers:
             await conn.execute("UPDATE users SET activated_at = now() WHERE phone = %s AND activated_at IS NULL",
                                (phone,))
 
+    async def get(self, phone: str) -> dict | None:
+        async with db.pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute("SELECT phone, created_at, last_login_at, activated_at, sessions_revoked_at"
+                              " FROM users WHERE phone = %s", (phone,))
+            return await cur.fetchone()
+
+    async def revoke_sessions(self, phone: str) -> None:
+        async with db.pool.connection() as conn:
+            await conn.execute("UPDATE users SET sessions_revoked_at = now() WHERE phone = %s", (phone,))
+
+    async def delete(self, phone: str) -> None:
+        async with db.pool.connection() as conn:
+            await conn.execute("DELETE FROM users WHERE phone = %s", (phone,))
+
 
 store: UserStore = MemoryUsers()
 
@@ -107,6 +137,29 @@ async def login(phone: str) -> dict:
     except Exception:
         log.exception("user lookup failed for %s, skipping signup and welcome this time", mask_phone(phone))
         return {"phone": phone, "activated_at": "unknown", "new": False}
+
+
+async def get(phone: str) -> dict | None:
+    """The user's row, or None if they never signed up (or deleted their account). Raises if the DB is down."""
+    return await asyncio.wait_for(store.get(phone), DB_TIMEOUT_S)
+
+
+async def is_member(phone: str) -> bool:
+    """Signed up. False when the lookup fails: an outage must not open Ada to everyone."""
+    try:
+        return await get(phone) is not None
+    except Exception:
+        log.exception("user lookup for %s failed, treating as not signed up", mask_phone(phone))
+        return False
+
+
+async def revoke_sessions(phone: str) -> None:
+    """Log out everywhere: tokens issued before now stop working."""
+    await asyncio.wait_for(store.revoke_sessions(phone), DB_TIMEOUT_S)
+
+
+async def delete(phone: str) -> None:
+    await asyncio.wait_for(store.delete(phone), DB_TIMEOUT_S)
 
 
 async def activate(phone: str) -> bool:

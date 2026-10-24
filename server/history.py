@@ -76,6 +76,7 @@ class HistoryStore(Protocol):
     async def list_calls(self, user_id: str, limit: int = 50) -> list[dict]: ...
     async def stats(self, user_id: str, since: datetime) -> dict[str, int]: ...
     async def get_call(self, call_id: str, user_id: str = "") -> dict | None: ...
+    async def delete_user(self, user_id: str) -> int: ...
 
 
 class MemoryHistory:
@@ -133,6 +134,12 @@ class MemoryHistory:
         if call is not None and user_id and call["user_id"] != user_id:
             return None
         return call
+
+    async def delete_user(self, user_id: str) -> int:
+        ids = [cid for cid, c in self.calls.items() if c["user_id"] == user_id]
+        for cid in ids:
+            del self.calls[cid]
+        return len(ids)
 
 
 # Live-but-past-its-limit, in SQL (same rule as is_stale).
@@ -214,6 +221,11 @@ class PostgresHistory:
             call["events"] = await cur.fetchall()
             return call
 
+    async def delete_user(self, user_id: str) -> int:
+        async with db.pool.connection() as conn:  # call_events go with their call (ON DELETE CASCADE)
+            cur = await conn.execute("DELETE FROM calls WHERE user_id = %s", (user_id,))
+            return cur.rowcount
+
 
 store: HistoryStore = MemoryHistory()
 
@@ -294,6 +306,13 @@ async def stats(user_id: str, since: datetime) -> dict[str, int]:
 
 async def get_call(call_id: str, user_id: str = "") -> dict | None:
     return await store.get_call(call_id, user_id)
+
+
+async def delete_user(user_id: str) -> int:
+    """Account deletion: drop the user's calls and their timelines. Returns how many calls."""
+    if not user_id:  # "" means "all users" in the reads above; never here
+        raise ValueError("user_id required")
+    return await store.delete_user(user_id)
 
 
 def recent_cutoff() -> datetime:
