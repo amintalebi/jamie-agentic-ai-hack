@@ -30,8 +30,7 @@ class ScribeTranscriber:
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(self.URL, headers={"xi-api-key": settings.ELEVENLABS_API_KEY},
                                   data={"model_id": "scribe_v2"}, files={"file": ("voice-note", audio)})
-        if r.is_error:
-            # TODO(hack): if iMessage .caf audio is ever rejected, convert it with ffmpeg first.
+        if r.is_error:  # iMessage voice notes are accepted as is (tested live on 24 Oct 2026)
             raise RuntimeError(f"scribe failed: {r.status_code} {r.text[:200]}")
         data = r.json()
         log.info("transcribed %d bytes (%s) in %.0f ms", len(audio), data.get("language_code"),

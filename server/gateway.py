@@ -184,15 +184,17 @@ async def route_inbound(msg: InboundMessage) -> None:
             if call_id:
                 await calls.resolve_answer(call_id, msg.vote)
                 return
-            text = msg.vote  # vote on an orchestrator poll: treat the option as the user's reply
-        elif msg.audio_url:
-            audio = await messenger.download_attachment(msg.audio_url)
-            text = await stt.transcribe(audio)
-        else:
-            text = msg.text
 
+        # Typing starts before the voice-note download and transcription (~1.2 s), not after.
         await _typing(msg.user_id, True)
         try:
+            if msg.vote is not None:
+                text = msg.vote  # vote on an orchestrator poll: treat the option as the user's reply
+            elif msg.audio_url:
+                audio = await messenger.download_attachment(msg.audio_url)
+                text = await stt.transcribe(audio)
+            else:
+                text = msg.text
             await orchestrator.handle_message(msg.user_id, text)
         finally:
             await _typing(msg.user_id, False)
