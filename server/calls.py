@@ -4,6 +4,7 @@ State lives in memory: the server is a single process and calls last minutes.
 The finished call record is saved by the orchestrator through memory.save_call.
 """
 import asyncio
+import hmac
 import logging
 import time
 import uuid
@@ -11,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from livekit import api as lk_api
 
 from common.contracts import CallBrief, CallEvent
@@ -86,7 +87,7 @@ class FakeDispatcher:
     async def _run(self, brief: CallBrief) -> None:
         base = f"{settings.LOCAL_SERVER_URL}/calls/{brief.call_id}"
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=5, headers=agent_headers()) as client:
                 async def post(**kw) -> None:
                     r = await client.post(f"{base}/events", json=CallEvent(call_id=brief.call_id, **kw).model_dump())
                     r.raise_for_status()
@@ -281,7 +282,23 @@ async def handle_event(event: CallEvent) -> None:
 
 # --- HTTP routes used by the call agent ---------------------------------------
 
-@router.post("/calls/{call_id}/events")
+def require_agent(authorization: str = Header(default="")) -> None:
+    """The call agent sends CALL_EVENTS_SECRET as a bearer token. Without it anyone who learns a
+    call id could post a fake result (texting the user a made-up summary) or read the answer."""
+    secret = settings.CALL_EVENTS_SECRET
+    if not secret:
+        return  # not configured yet: open, see settings.CALL_EVENTS_SECRET
+    given = authorization.removeprefix("Bearer ").strip()
+    if not hmac.compare_digest(given.encode(), secret.encode()):
+        raise HTTPException(401, "bad call agent secret")
+
+
+def agent_headers() -> dict[str, str]:
+    """Headers for requests to the call-agent routes (used by FakeDispatcher)."""
+    return {"Authorization": f"Bearer {settings.CALL_EVENTS_SECRET}"} if settings.CALL_EVENTS_SECRET else {}
+
+
+@router.post("/calls/{call_id}/events", dependencies=[Depends(require_agent)])
 async def post_event(call_id: str, event: CallEvent, background: BackgroundTasks) -> dict:
     if event.call_id != call_id:
         raise HTTPException(400, "call_id in path and body differ")
@@ -294,7 +311,7 @@ async def post_event(call_id: str, event: CallEvent, background: BackgroundTasks
     return {"ok": True}
 
 
-@router.get("/calls/{call_id}/answer")
+@router.get("/calls/{call_id}/answer", dependencies=[Depends(require_agent)])
 async def get_answer(call_id: str, wait: int = 40) -> dict:
     """Long-poll for the user's answer to the last question. {"answer": null} on timeout."""
     state = _calls.get(call_id)

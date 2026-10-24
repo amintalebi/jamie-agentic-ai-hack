@@ -31,7 +31,7 @@ QDRANT_API_KEY = env("QDRANT_API_KEY")
 QDRANT_PATH = env("QDRANT_PATH", "")             # optional local disk path when QDRANT_URL is empty
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
 ORCHESTRATOR_MODEL = env("ORCHESTRATOR_MODEL", "claude-sonnet-5-5")
-# Seed identity for a user we have never seen, so the demo works on a fresh database.
+# Seed identity for the demo phones (DEMO_USERS), so the demo works on a fresh database.
 DEMO_USER_NAME = env("DEMO_USER_NAME", "Sina")
 DEMO_BUSINESS_NAME = env("DEMO_BUSINESS_NAME", "Trattoria da Demo")
 CALL_LANGUAGE = env("CALL_LANGUAGE", "en")       # en | de: language the call agent speaks by default
@@ -41,9 +41,18 @@ LINQ_WEBHOOK_SECRET = env("LINQ_WEBHOOK_SECRET")     # whsec_...; empty = signat
 ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY")
 DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY")       # search_restaurants tool; empty = search unavailable
 SERVER_PUBLIC_URL = env("SERVER_PUBLIC_URL").rstrip("/")
+# Shared with the call agent; it sends it as a bearer token on /calls/{id}/events and /answer.
+# Empty = those routes are open (set it on the call agent first, then here).
+CALL_EVENTS_SECRET = env("CALL_EVENTS_SECRET")
 # Where the fake call posts its events. The real call agent uses SERVER_PUBLIC_URL.
 LOCAL_SERVER_URL = env("LOCAL_SERVER_URL", "http://127.0.0.1:8000")
 
 
 def allowed_call_numbers() -> set[str]:
     return {n.strip() for n in env("ALLOWED_CALL_NUMBERS").split(",") if n.strip()}
+
+
+def demo_users() -> set[str]:
+    """Phones (E.164) that may text Ada without signing up, and that get the demo identity
+    (DEMO_USER_NAME, the usual Italian place). Everyone else must sign up and starts with no facts."""
+    return {n.strip() for n in env("DEMO_USERS").split(",") if n.strip()}
