@@ -1,0 +1,22 @@
+{
+  "call_id": "test-italian-en-1",
+  "user_id": "user-sina",
+  "to_number": "+4930000000001",
+  "language": "en",
+  "caller_name": "Sina",
+  "goal": "Book a table for 4 people on Sunday 25 October at 8 pm, inside",
+  "user_facts": {
+    "name": "Sina",
+    "booking_name": "Sina",
+    "callback_number": "+4915100000002"
+  },
+  "allowed_decisions": [
+    "time within 30 min of 20:00",
+    "any table inside"
+  ],
+  "must_ask_user_for": [
+    "deposit or fee",
+    "different date"
+  ],
+  "max_call_seconds": 240
+}

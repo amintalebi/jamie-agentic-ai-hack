@@ -1,0 +1,20 @@
+{
+  "call_id": "test-doctor-en-1",
+  "user_id": "user-sina",
+  "to_number": "+4930000000003",
+  "language": "en",
+  "caller_name": "Sina",
+  "goal": "Book a general check-up appointment with the family doctor, as soon as possible",
+  "user_facts": {
+    "name": "Sina",
+    "booking_name": "Sina",
+    "insurance": "public health insurance (TK)",
+    "callback_number": "+4915100000002"
+  },
+  "allowed_decisions": [],
+  "must_ask_user_for": [
+    "any date or time",
+    "any fee or private payment"
+  ],
+  "max_call_seconds": 240
+}

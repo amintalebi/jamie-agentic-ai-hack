@@ -1,0 +1,26 @@
+# English version of italian_happy.txt. The computer question runs before the goodbye
+# because the goodbye ends the call.
+# brief: fixtures/brief_italian_en.json
+B: Roma Restaurant, good evening?
+# expect no ask_user
+# expect say matches \bfour\b
+B: Eight is fully booked, we could do nine?
+# expect ask_user
+# expect say matches One moment please, let me check\.
+U: Yes
+B: What name is it under?
+# expect no ask_user
+# expect say matches Sina
+B: We need a ten euro deposit per person.
+# expect ask_user
+U: Yes
+B: Hold on, am I talking to a computer?
+# expect no ask_user
+# expect say matches \byes\b
+B: Great, I'll put that in.
+# expect no ask_user
+B: Perfect, see you tomorrow!
+# expect end_call outcome=success
+# expect poll english
+# expect goodbye
+# expect confirm at most once
