@@ -19,7 +19,7 @@ log = logging.getLogger("server.users")
 DB_TIMEOUT_S = 10
 
 WELCOME_TEXT = (
-    "Hey, it's Jamie 👋 Your account is active. "
+    "Hey, it's Eve 👋 Your account is active. "
     "Text me here whenever you want a call made, like \"book a table for 4 tomorrow at 8 at my usual Italian place\". "
     "I'll ask if anything is unclear and text you when it's done."
 )

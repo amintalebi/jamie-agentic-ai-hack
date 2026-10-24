@@ -1,4 +1,4 @@
-# Jamie: call-for-me iMessage agent
+# Eve: call-for-me iMessage agent
 
 A personal assistant you text on iMessage. Tell it what you need ("book a table for four tomorrow at eight at the usual Italian place") and it phones the business for you, in German or English, then texts you the result.
 
@@ -59,7 +59,7 @@ docker compose up --build
 curl localhost:8000/health
 ```
 
-The call monitor (an installable PWA) is at `http://localhost:8080/app/`. Enter the phone number you text Jamie from and you're straight in (no signup, no OTP). It shows that number's call history, the live state of each call, any question waiting on you, the timeline and the transcript.
+The call monitor (an installable PWA) is at `http://localhost:8080/app/`. Enter the phone number you text Eve from and you're straight in (no signup, no OTP). It shows that number's call history, the live state of each call, any question waiting on you, the timeline and the transcript.
 
 Full setup, as components land:
 

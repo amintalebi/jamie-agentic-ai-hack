@@ -49,7 +49,7 @@ async def main() -> None:
         start = (datetime.now() + timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
         await tool("send_calendar_invite", title="Dinner at Trattoria Da Enzo (4 people)",
                    start=start.isoformat(timespec="minutes"), location="Trattoria Da Enzo, Berlin",
-                   notes="Booked by Jamie for Sina, table inside")
+                   notes="Booked by Eve for Sina, table inside")
     if "react" in args.only:
         await tool("react", reaction="love")
 

@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
     await db.close_pool()
 
 
-app = FastAPI(title="Jamie server", lifespan=lifespan)
+app = FastAPI(title="Eve server", lifespan=lifespan)
 app.include_router(gateway.router)
 app.include_router(calls.router)
 app.include_router(dashboard.router)

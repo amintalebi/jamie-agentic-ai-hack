@@ -1,7 +1,7 @@
 import { Renderer } from "@openuidev/react-lang";
 import { REGEXP_ONLY_DIGITS } from "input-otp";
 import {
-  ArrowLeft, ArrowRight, CircleAlert, Languages, Loader2, LogOut, MessageSquareText, PhoneCall, RefreshCw, Sparkles, Vote,
+  ArrowLeft, ArrowRight, ChevronDown, CircleAlert, Languages, Loader2, LogOut, MessageSquareText, PhoneCall, RefreshCw, Sparkles, Vote,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Aurora, Confetti, LiveDot, Wordmark } from "@/components/brand";
@@ -10,14 +10,14 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
-  ApiError, AuthError, clearPhone, fetchScreen, getPhone, getToken, normalisePhone, readSmsCode, requestCode,
+  ApiError, AuthError, clearPhone, fetchScreen, getPhone, getToken, readSmsCode, requestCode,
   setPhone, setToken, verifyCode, type Screen,
 } from "./api";
+import { COUNTRIES, flag, splitE164, toE164, type Country } from "./countries";
 import { library, resetStats } from "./library";
 
 const LIVE_POLL_MS = 2000;
@@ -140,7 +140,7 @@ export function App() {
           <div className="rise flex flex-col items-center gap-4 rounded-3xl border bg-card p-10 text-center shadow-soft">
             <span className="grid size-12 place-items-center rounded-2xl bg-bad-soft text-bad"><CircleAlert /></span>
             <div>
-              <div className="font-semibold">Could not reach Jamie</div>
+              <div className="font-semibold">Could not reach Eve</div>
               <div className="mt-1 text-sm text-muted-foreground">{state.message}</div>
             </div>
             <Button variant="outline" className="rounded-full" onClick={() => location.reload()}>
@@ -187,7 +187,7 @@ function AccountMenu({ onLogout }: { onLogout: () => void }) {
           aria-label="Account"
           className="bg-brand grid size-8 place-items-center rounded-full text-[11px] font-semibold text-white shadow-soft ring-2 ring-background outline-none transition-transform hover:scale-105 focus-visible:ring-ring"
         >
-          {last4 ? last4.slice(-2) : "J"}
+          {last4 ? last4.slice(-2) : "E"}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56 rounded-xl">
@@ -214,7 +214,7 @@ function Welcome({ onClose }: { onClose: () => void }) {
           <Sparkles className="size-7" />
         </span>
         <div className="flex-1">
-          <h2 className="text-xl font-semibold tracking-tight">You're in. Say hi to Jamie!</h2>
+          <h2 className="text-xl font-semibold tracking-tight">You're in. Say hi to Eve!</h2>
           <p className="mt-1 text-muted-foreground">
             We just sent you an iMessage. Reply there with your first request, like
             <span className="text-foreground"> "book a table for 4 tomorrow at 8"</span>.
@@ -268,7 +268,7 @@ function SignIn({ onLoggedIn }: { onLoggedIn: (token: string, newUser: boolean) 
             <h1 className="text-balance text-[44px] font-semibold leading-[1.02] tracking-[-0.035em] sm:text-6xl lg:text-[56px]">
               Text it.
               <br />
-              <span className="text-gradient">Jamie makes the call.</span>
+              <span className="text-gradient">Eve makes the call.</span>
             </h1>
             <p className="max-w-md text-lg text-muted-foreground">
               Your assistant on iMessage. It books the table, checks with you mid-call, and texts you when it's done.
@@ -314,14 +314,17 @@ function useCountdown(until: number): number {
  * and the form submits itself once 6 digits are in.
  */
 function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string, newUser: boolean) => void }) {
-  const [value, setValue] = useState(getPhone);
+  // Germany by default; a number saved from an earlier login picks its own country.
+  const [country, setCountry] = useState<Country>(() => splitE164(getPhone()).country);
+  const [value, setValue] = useState(() => (getPhone() ? splitE164(getPhone()).national : ""));
+  const typed = toE164(country, value);
   const [phone, setPhoneSent] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // The server's resend cooldown is per number, so remember which number it is for.
   const [resend, setResend] = useState({ phone: "", at: 0 });
-  const wait = useCountdown(resend.phone === (phone || normalisePhone(value)) ? resend.at : 0);
+  const wait = useCountdown(resend.phone === (phone || typed) ? resend.at : 0);
   const lastTried = useRef("");
 
   async function run(target: string, action: () => Promise<void>) {
@@ -373,32 +376,66 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string, newUser: boolea
   const card = "glass rise w-full max-w-md rounded-3xl border border-border/70 p-5 shadow-lift sm:p-6";
 
   if (!phone) {
-    const valid = normalisePhone(value).length >= 8;
+    const valid = /^\+[1-9]\d{6,14}$/.test(typed);
     return (
       <form
         key="phone"
         className={card}
         onSubmit={(e) => {
           e.preventDefault();
-          const p = normalisePhone(value);
-          if (p) sendCode(p);
+          if (typed) sendCode(typed);
         }}
       >
         <label htmlFor="phone" className="text-sm font-medium">Sign up or log in</label>
-        <p className="mt-0.5 text-sm text-muted-foreground">Use the number you text Jamie from. New here? This creates your account.</p>
+        <p className="mt-0.5 text-sm text-muted-foreground">Use the number you text Eve from. New here? This creates your account.</p>
         <div className="mt-4 flex flex-col gap-2.5 sm:flex-row">
-          <Input
-            id="phone"
-            type="tel"
-            inputMode="tel"
-            autoComplete="tel"
-            placeholder="+49 151 0000 1234"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            autoFocus
-            aria-invalid={Boolean(error) || undefined}
-            className="h-12 flex-1 rounded-xl bg-background/70 px-4 text-base tabular-nums md:text-base"
-          />
+          <div
+            className={cn(
+              "flex h-12 flex-1 items-center rounded-xl border border-input bg-background/70 shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+              error && "border-bad",
+            )}
+          >
+            {/* Native select underneath: the phone's own wheel / list picker, styled as a flag chip. */}
+            <label className="relative flex h-full shrink-0 cursor-pointer items-center gap-1.5 rounded-l-xl border-r border-input pl-3.5 pr-2.5 hover:bg-muted/60">
+              <span className="text-xl leading-none" aria-hidden>{flag(country.iso)}</span>
+              <span className="text-base font-medium tabular-nums">+{country.dial}</span>
+              <ChevronDown className="size-3.5 text-muted-foreground" aria-hidden />
+              <select
+                aria-label="Country code"
+                value={country.iso}
+                onChange={(e) => setCountry(COUNTRIES.find((c) => c.iso === e.target.value) ?? country)}
+                className="absolute inset-0 cursor-pointer opacity-0"
+              >
+                {COUNTRIES.map((c) => (
+                  <option key={c.iso} value={c.iso}>{`${flag(c.iso)} ${c.name} (+${c.dial})`}</option>
+                ))}
+              </select>
+            </label>
+            <input
+              id="phone"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="151 2345 6789"
+              value={value}
+              onChange={(e) => {
+                const v = e.target.value;
+                // A full international number (typed or autofilled) switches the country to match.
+                if (/^\s*(\+|00)/.test(v)) {
+                  const split = splitE164(toE164(country, v));
+                  if (split.national && split.country !== country) {
+                    setCountry(split.country);
+                    setValue(split.national);
+                    return;
+                  }
+                }
+                setValue(v);
+              }}
+              autoFocus
+              aria-invalid={Boolean(error) || undefined}
+              className="h-full min-w-0 flex-1 rounded-r-xl bg-transparent px-3 text-base tabular-nums outline-none placeholder:text-muted-foreground"
+            />
+          </div>
           <Button
             type="submit"
             disabled={busy || wait > 0 || !valid}
@@ -434,7 +471,7 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string, newUser: boolea
       </button>
       <div className="mt-3 text-sm font-medium">Enter the code</div>
       <p className="mt-0.5 text-sm text-muted-foreground">
-        Sent to <span className="font-medium text-foreground tabular-nums">{phone}</span>. It fills in by itself on most phones.
+        Sent to <span className="font-medium text-foreground tabular-nums">{flag(splitE164(phone).country.iso)} {phone}</span>. It fills in by itself on most phones.
       </p>
       <div className="mt-5 flex items-center gap-3">
         <InputOTP

@@ -202,7 +202,7 @@ export const Empty = defineComponent({
       <div className="relative mt-6 rounded-[18px] rounded-br-[6px] bg-imessage px-4 py-2 text-[15px] text-white shadow-soft">
         Book a table for 4 tomorrow at 8 🍝
       </div>
-      <span className="relative mt-2 text-xs text-muted-foreground">Try texting Jamie this</span>
+      <span className="relative mt-2 text-xs text-muted-foreground">Try texting Eve this</span>
     </div>
   ),
 });
@@ -308,12 +308,12 @@ export const CallHeader = defineComponent({
               {onHold ? (
                 <>
                   <TypingDots className="text-warn" />
-                  <span className="text-sm font-medium">Business on hold while Jamie checks with you</span>
+                  <span className="text-sm font-medium">Business on hold while Eve checks with you</span>
                 </>
               ) : (
                 <>
                   <Waveform bars={28} className="h-6 flex-1 text-primary/80" />
-                  <span className="shrink-0 text-sm font-medium">{props.status === "dialing" ? "Ringing…" : "Jamie is talking"}</span>
+                  <span className="shrink-0 text-sm font-medium">{props.status === "dialing" ? "Ringing…" : "Eve is talking"}</span>
                 </>
               )}
             </div>
@@ -428,7 +428,7 @@ export const TranscriptLine = defineComponent({
           <span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><Store className="size-3" /></span>
         )}
         <div className={cn("flex flex-col", agent && "items-end")}>
-          <span className="mx-2 mb-0.5 text-[11px] text-muted-foreground">{agent ? "Jamie" : "Business"}</span>
+          <span className="mx-2 mb-0.5 text-[11px] text-muted-foreground">{agent ? "Eve" : "Business"}</span>
           <div
             className={cn(
               "rounded-[18px] px-3.5 py-2 text-[15px] leading-snug [overflow-wrap:anywhere]",
