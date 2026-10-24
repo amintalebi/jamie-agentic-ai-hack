@@ -51,6 +51,19 @@ def _make_llm(max_tokens: int, timeout: float) -> ChatAnthropic:
     )
 
 
+async def _set_status(user_id: str, text: str, new: bool = False) -> None:
+    """Best effort live status bubble. Cosmetic, so it must never break a turn or a call.
+    gateway.set_status only exists once the iMessage extras from main are merged; without it
+    this is a no-op. The updates during a call belong to calls.py, see docs/issue-live-call-status.md."""
+    set_status = getattr(gateway, "set_status", None)
+    if set_status is None:
+        return
+    try:
+        await set_status(user_id, text, new)
+    except Exception as e:
+        log.warning("status update for %s failed: %s", mask_phone(user_id), e)
+
+
 def _sanitize_text(text: str) -> str:
     """Enforce CLAUDE.md conventions: no em/en dashes, no markdown bold/headers."""
     cleaned = text.replace("\u2014", ", ").replace("\u2013", "-")
@@ -158,6 +171,9 @@ class PlaceCallArgs(BaseModel):
         description="Call language ('de' for German businesses in Berlin, 'en' if English is requested).",
     )
     caller_name: str = Field(description="Name of the user we are calling on behalf of, e.g. 'Sina'.")
+    business_name: str = Field(
+        default="", description="Name of the business being called, as find_business returned it."
+    )
     goal: str = Field(
         description="Clear one-line goal in English, e.g. 'Book a table for 4, Sun 25 Oct, 20:00, inside'."
     )
@@ -225,6 +241,7 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
         to_number: str,
         caller_name: str,
         goal: str,
+        business_name: str = "",
         language: Literal["de", "en"] = "de",
         allowed_decisions: list[str] | None = None,
         must_ask_user_for: list[str] | None = None,
@@ -261,6 +278,7 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
             log.warning("place_call refused for user %s: %s", mask_phone(user_id), exc)
             return f"ERROR: CallRefused: {exc}. Tell the user you cannot call that number."
         tracker.placed_call_id = call_id
+        await _set_status(user_id, f"Calling {business_name or 'them'} now...", new=True)
         return f"Call dispatched with call_id={call_id}."
 
     return [
@@ -382,8 +400,14 @@ async def _run_langgraph_turn(user_id: str, text: str) -> None:
                 return
             break
 
+    # Nothing was said. Most likely the loop hit MAX_TOOL_ITERATIONS mid tool call, so the last
+    # message carries tool calls and no text. The user must still hear something back.
     if tracker.placed_call_id:
         await _reply(user_id, "Calling now, I will text you once I have an update.")
+        return
+    log.warning("turn for %s produced no reply after %d iterations",
+                mask_phone(user_id), final_state["iterations"])
+    await _reply(user_id, "Sorry, I got a bit stuck on that one. Can you say it again?")
 
 
 def _booking_brief(user_id: str, facts: dict[str, str], business: dict, seating: str) -> CallBrief:
@@ -411,6 +435,7 @@ async def _place_booking(user_id: str, facts: dict[str, str], seating: str) -> N
         await _reply(user_id, f"I cannot call that number: {exc}")
         return
     await _reply(user_id, f"Calling {business['name']} now to {brief.goal[0].lower()}{brief.goal[1:]}.")
+    await _set_status(user_id, f"Calling {business['name']} now...", new=True)
 
 
 async def _fallback_turn(user_id: str, text: str) -> None:
@@ -522,6 +547,17 @@ Details: {json.dumps(event.details or {}, ensure_ascii=False)}"""
         return _fallback_call_summary(brief, event)
 
 
+def _closing_status(event: CallEvent) -> str:
+    """Last line of the status bubble, replacing whatever the call left there."""
+    details = event.details or {}
+    if event.outcome == "success":
+        booked = ", ".join(v for v in (details.get("time"), details.get("date")) if v)
+        return f"Booked{': ' + booked if booked else ''}"
+    if event.outcome == "partial":
+        return "Call ended, not fully confirmed"
+    return "Could not book it"
+
+
 async def handle_call_result(event: CallEvent) -> None:
     """Called by calls.py for 'result' and 'failed' events: text the user a summary, save the call."""
     brief = calls.get_brief(event.call_id)
@@ -530,6 +566,7 @@ async def handle_call_result(event: CallEvent) -> None:
         return
     await memory.save_call(brief, event)
     await _remember_durable_call_facts(brief, event)
+    await _set_status(brief.user_id, _closing_status(event))
     summary = await _summarize_call_with_llm(brief, event)
     await _reply(brief.user_id, summary)
 
