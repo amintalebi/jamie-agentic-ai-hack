@@ -14,10 +14,20 @@ curl localhost:8000/health             # checks the DB connection and reports th
 docker compose down -v                 # stop and wipe the DB volume (re-runs db/init/*.sql next start)
 ```
 
-Run the server without Docker (needs a Postgres with pgvector reachable at `DATABASE_URL`):
+Run the server without Docker, from the repo root (no database needed; every adapter defaults to its fake):
 ```
-cd server && pip install -r requirements.txt && DATABASE_URL=postgresql://jamie:jamie@localhost:5432/jamie uvicorn main:app --reload
+pip install -r server/requirements.txt
+ALLOWED_CALL_NUMBERS=+4915100001234 uvicorn server.main:app --reload
+# fake an inbound iMessage; "/call" places the scripted demo call
+curl -XPOST localhost:8000/dev/inbound -H 'content-type: application/json' \
+  -d '{"message_id":"m1","user_id":"+4917600005678","text":"/call"}'
+# answer the mid-call poll
+curl -XPOST localhost:8000/dev/inbound -H 'content-type: application/json' \
+  -d '{"message_id":"m2","user_id":"+4917600005678","vote":"Yes"}'
 ```
+Fake sends show up in the server log as `[fake send_text]` / `[fake send_poll]`.
+
+Call agent without a phone: `python scripts/fake_server.py` plus `python scripts/chat_test.py` (see `docs/role-e-call-conversation.md`).
 
 There are no tests or lint config yet.
 
@@ -79,7 +89,14 @@ contracts.md         human-readable copy of the contracts
 .env.example
 ```
 
-`contracts.py` lives in `server/`. Import it from both processes (shared via a small `common/` package or path hack; whichever is fastest).
+Actual layout differs from the sketch above in two ways:
+- Contracts live in `common/contracts.py` (not `server/`), shared by both processes. `call_agent/contracts_local.py` is a shim that re-exports them.
+- `server/` is a package: run it as `server.main:app` from the repo root and import siblings as `from server import calls`. The server Docker build context is the repo root, so the image includes `common/`.
+
+### Adapters and fakes
+Every outside service sits behind a small `Protocol` with a real and a fake implementation, chosen by an env var (all default to `fake`): `gateway.Messenger` (`MESSENGER_MODE=fake|linq`), `stt.Transcriber` (`STT_MODE=fake|scribe`), `calls.CallDispatcher` (`CALLS_MODE=fake|livekit`), `memory.MemoryStore` (in-memory for now). The fake dispatcher plays a scripted call over HTTP against the server's own `/calls/...` routes, so the mid-call poll round trip works without telephony. Module-level functions (`gateway.send_text`, `memory.remember`, ...) are the interface other modules call; never reach into an adapter directly.
+
+Modules import each other as modules (`from server import calls`) and look names up at call time; this is what lets `gateway`, `calls` and `orchestrator` import each other without cycles breaking.
 
 ## Interfaces between modules
 
@@ -89,11 +106,16 @@ Owners agreed on these signatures (see `docs/team-split.md`); stub them until th
 | --- | --- |
 | `call_agent/agent.py` -> prompts/tools | `prompts.build_instructions(brief: CallBrief) -> str`, `tools.make_tools(brief, ...) -> list` |
 | gateway -> orchestrator | `async orchestrator.handle_message(user_id: str, text: str) -> None` |
-| gateway -> calls | `calls.pending_question(user_id) -> call_id or None`, `calls.resolve_answer(call_id, answer: str) -> None` |
-| orchestrator, calls -> gateway | `async gateway.send_text(to, text)`, `async gateway.send_poll(to, question, options)` |
+| gateway -> calls | `calls.match_vote(user_id, option, poll_id) -> call_id or None`, `calls.resolve_answer(call_id, answer: str) -> None` |
+| orchestrator, calls -> gateway | `async gateway.send_text(to, text)`, `async gateway.send_poll(to, question, options) -> poll_id or None` (votes carry it back as `InboundMessage.poll_id`) |
 | orchestrator -> calls | `async calls.place_call(brief: CallBrief) -> call_id` |
 | calls -> orchestrator | `async orchestrator.handle_call_result(event: CallEvent) -> None` |
+| orchestrator -> calls | `calls.get_brief(call_id) -> CallBrief or None`, `calls.active_calls(user_id) -> list[CallBrief]`, `calls.CallRefused` |
+| gateway -> orchestrator/calls | `gateway.route_inbound(InboundMessage)`: dedupe, transcribe, route votes |
+| orchestrator -> memory | `get_facts`, `remember`, `log_message`, `recent_messages`, `save_call`, `find_business` (all async) |
 | `call_agent/events.py` -> server (HTTP) | `POST /calls/{id}/events` with a `CallEvent`; `GET /calls/{id}/answer?wait=40` |
+
+`user_id` everywhere is the user's E.164 phone number, so `gateway.send_text(to=user_id, ...)` needs no lookup.
 
 File ownership per person is in `docs/team-split.md`; check it before editing a file you do not own.
 
