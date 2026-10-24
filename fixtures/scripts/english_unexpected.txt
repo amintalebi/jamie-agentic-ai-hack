@@ -1,0 +1,31 @@
+# Unexpected questions with only the brief's facts (first name only, no car, no email).
+# Family name: ask the business if the first name is enough; they insist; the poll answer is
+# the non-informative "Full name" -> no second poll, carry on under Sina.
+# Self question: no poll. Car plate: poll with real options. Email: poll times out (empty U:).
+# brief: fixtures/brief_italian_en.json
+B: Roma Restaurant, good evening?
+# expect no ask_user
+B: Sure, eight works, a table for four inside. What's the family name?
+# expect no ask_user
+# expect say matches first name
+B: I need the full name for the reservation.
+# expect ask_user
+# expect ask_user at most once
+U: Full name
+# expect say matches Sina
+B: No problem. Where are you calling from, by the way?
+# expect no ask_user
+B: Do you have a car plate for the parking?
+# expect ask_user
+U: No car
+B: And an email address for the confirmation?
+# expect ask_user
+U:
+# expect say matches (can't|cannot|couldn't|could not) reach Sina
+B: Alright, you're all set for Sunday at eight.
+# expect no ask_user
+B: Thanks, bye!
+# expect end_call outcome=partial|success
+# expect poll english
+# expect goodbye
+# expect confirm at most once

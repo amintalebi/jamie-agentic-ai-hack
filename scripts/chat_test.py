@@ -1,6 +1,6 @@
 """Text harness for the call conversation: you play the business, Claude replies.
 
-Uses call_agent.prompts.build_instructions(brief). Tools:
+Uses call_agent.prompts.build_instructions(brief) + style.style_addendum(brief), as agent.py does. Tools:
   - default: ask_user/end_call stubs; poll answers come from stdin (or U: lines with --script)
   - --server URL: the real call_agent/tools.py (CallTools + EventsClient), e.g. against
     scripts/fake_server.py on :8001, which answers the polls
@@ -10,7 +10,7 @@ Uses call_agent.prompts.build_instructions(brief). Tools:
     python scripts/chat_test.py --script fixtures/scripts/italian_happy.txt --server http://localhost:8001
 
 Script format: "B: <business line>", "U: <poll answer>" (queued for the next ask_user),
-"# expect ask_user" / "# expect no ask_user" / "# expect say matches <regex>" (about the
+"# expect ask_user" / "# expect no ask_user" / "# expect ask_user at most once" / "# expect say matches <regex>" (about the
 preceding B: turn), "# expect end_call outcome=success|partial" and "# expect poll english"
 (whole call; checks the polls as posted, so only translated with --server),
 "# expect confirm at most once" (whole call: the agent's confirmation question appears 0 or 1 times),
@@ -36,7 +36,8 @@ sys.path.insert(0, str(ROOT / "call_agent"))
 from config import call_llm_model  # noqa: E402
 from contracts_local import CallBrief  # noqa: E402  TODO(hack): switch to server.contracts
 from prompts import build_instructions  # noqa: E402
-from tools import Transcript, looks_german  # noqa: E402
+from style import style_addendum  # noqa: E402  (A's phone-style layer, appended as in agent.py)
+from tools import Transcript, looks_german, no_answer_message  # noqa: E402
 
 TOOLS = [
     {
@@ -77,7 +78,6 @@ TOOLS = [
     },
 ]
 
-NO_ANSWER = "The user did not answer in time. Say they will call back, say goodbye and call end_call with outcome partial."
 
 
 def latency_kwargs(model: str, effort: str) -> dict:
@@ -92,7 +92,8 @@ def latency_kwargs(model: str, effort: str) -> dict:
 class StubTools:
     """ask_user answers from a queue (script U: lines) or, if none is given, from stdin."""
 
-    def __init__(self, answers: deque | None = None):
+    def __init__(self, brief: CallBrief, answers: deque | None = None):
+        self.brief = brief
         self.answers = answers
         self.polls: list[tuple[str, list[str]]] = []  # raw from the model (no translation here)
 
@@ -103,7 +104,7 @@ class StubTools:
         else:
             answer = self.answers.popleft() if self.answers else ""
             print(f"USER ANSWER> {answer or '(none, timeout)'}")
-        return f"The user answered: {answer}" if answer else NO_ANSWER
+        return f"{self.brief.caller_name} answered: {answer}" if answer else no_answer_message(self.brief)
 
     async def end_call(self, outcome: str, details: dict) -> str:
         return "Call ended."
@@ -241,6 +242,8 @@ def check_turn(exp: str, turn: TurnLog | None) -> tuple[bool, str]:
         return turn.asks > 0, f"ask_user calls={turn.asks}"
     if exp == "no ask_user":
         return turn.asks == 0, f"ask_user calls={turn.asks}"
+    if exp == "ask_user at most once":
+        return turn.asks <= 1, f"ask_user calls={turn.asks}"
     if exp.startswith("say matches "):
         pattern = exp[len("say matches "):]
         return bool(re.search(pattern, said, re.IGNORECASE)), f"said={said!r}"
@@ -275,10 +278,10 @@ async def run_script(client, model: str, effort: str, brief: CallBrief, script: 
     _, turns, call_expects = parse_script(script)
     transcript = Transcript()
     answers: deque = deque()
-    tools = RealTools(server, brief, transcript) if server else StubTools(answers)
+    tools = RealTools(server, brief, transcript) if server else StubTools(brief, answers)
     if server and any(t.answers for t in turns):
         print("(note: U: lines are ignored with --server; the server answers the polls)")
-    system = build_instructions(brief)
+    system = build_instructions(brief) + style_addendum(brief)
     messages: list = []
     call = CallLog()
     logs: list[TurnLog | None] = []
@@ -324,8 +327,8 @@ async def run_script(client, model: str, effort: str, brief: CallBrief, script: 
 
 async def run_interactive(client, model: str, effort: str, brief: CallBrief, server: str | None) -> None:
     transcript = Transcript()
-    tools = RealTools(server, brief, transcript) if server else StubTools()
-    system = build_instructions(brief)
+    tools = RealTools(server, brief, transcript) if server else StubTools(brief)
+    system = build_instructions(brief) + style_addendum(brief)
     messages: list = []
     call = CallLog()
     print(f"model={model}  brief={brief.call_id}  lang={brief.language}")
@@ -372,7 +375,7 @@ def main() -> None:
     brief_file = Path(brief_path) if Path(brief_path).exists() else ROOT / brief_path
     brief = CallBrief.model_validate_json(brief_file.read_text())
     if args.show_prompt:
-        print(build_instructions(brief))
+        print(build_instructions(brief) + style_addendum(brief))
         return
 
     client = anthropic.AsyncAnthropic(timeout=30.0)

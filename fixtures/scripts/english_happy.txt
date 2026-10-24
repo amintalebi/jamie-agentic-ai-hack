@@ -11,6 +11,19 @@ U: Yes
 B: What name is it under?
 # expect no ask_user
 # expect say matches Sina
+B: And the family name?
+# expect no ask_user
+# expect say matches first name
+B: Sorry, we do need a family name.
+# expect ask_user
+U: Mahmoodi
+# expect say matches Mahmoodi
+B: Could you spell the name?
+# expect no ask_user
+# expect say matches \b[A-Z], [A-Z], [A-Z]\b
+B: How old are you?
+# expect no ask_user
+# expect say matches assistant
 B: We need a ten euro deposit per person.
 # expect ask_user
 U: Yes

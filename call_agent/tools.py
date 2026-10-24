@@ -14,17 +14,36 @@ from livekit.agents import RunContext, function_tool, get_job_context
 
 from contracts_local import CallBrief, CallEvent  # TODO(hack): switch to server.contracts
 from events import EventsClient
+from prompts import booking_name
 
 log = logging.getLogger("call_agent.tools")
 
 ANSWER_WAIT_S = 40
 ANSWER_RETRY_S = 5  # one retry, total <= 45 s
+HOLD_UPDATE_AFTER_S = 15  # one spoken "still here" while the poll is open, inside ANSWER_WAIT_S
+HOLD_UPDATE = {
+    "de": "Danke fürs Warten, einen Moment noch.",
+    "en": "Thanks for holding, one more moment.",
+}
 
 # Polls are iMessage buttons for an English-speaking user, but the call LLM sometimes
 # writes them in German. Detect that and translate with one short Haiku call.
 TRANSLATE_MODEL = "claude-haiku-4-5"
 _GERMAN_RE = re.compile(r"[äöüÄÖÜß]|\b(ja|nein|passt|gerne|danke|uhr|datum)\b", re.IGNORECASE)
 _client: anthropic.AsyncAnthropic | None = None
+
+
+def no_answer_message(brief: CallBrief) -> str:
+    """Tool result when the poll times out. The call goes on: hanging up here lost real bookings."""
+    name, booking = brief.caller_name, booking_name(brief)
+    return (
+        f"{name} did not answer in time. Do not hang up. If you asked about a fact about {name}, say you "
+        f"can't reach {name} right now and {name} will confirm it with them afterwards, then carry on with "
+        f"the booking under the name {booking}. If you asked about a decision, say you can't reach {name} "
+        f"right now, then accept what they offered if it fits what you may decide yourself, or ask them to "
+        f"hold it tentatively for {name}; wait for their reply, then summarise in one sentence, say goodbye "
+        f"and call end_call with outcome partial."
+    )
 
 
 def looks_german(question: str, options: list[str]) -> bool:
@@ -92,16 +111,29 @@ class CallTools:
         await self.events.post(CallEvent(
             call_id=self.brief.call_id, type="question", text=question, options=options,
         ))
-        answer = await self.events.wait_answer(ANSWER_WAIT_S)
+        answer = await self.events.wait_answer(HOLD_UPDATE_AFTER_S)
+        if answer is None:
+            self._hold_update(context)
+            answer = await self.events.wait_answer(ANSWER_WAIT_S - HOLD_UPDATE_AFTER_S)
         if answer is None:
             answer = await self.events.wait_answer(ANSWER_RETRY_S)
         if answer is None:
             log.warning("ask_user timed out call=%s", self.brief.call_id)
-            return (
-                f"{self.brief.caller_name} did not answer in time. Tell the business that "
-                f"{self.brief.caller_name} will call back, say goodbye and call end_call with outcome partial."
-            )
+            return no_answer_message(self.brief)
         return f"{self.brief.caller_name} answered: {answer}"
+
+    def _hold_update(self, context: RunContext | None) -> None:
+        """Say the hold update once. The tool's own speech is already marked done, so say() plays now.
+        add_to_chat_ctx=False keeps the LLM history valid (nothing between tool call and result)."""
+        text = HOLD_UPDATE.get(self.brief.language, HOLD_UPDATE["en"])
+        log.info("no answer after %ss, hold update call=%s", HOLD_UPDATE_AFTER_S, self.brief.call_id)
+        if context is None:  # text harness
+            return
+        try:
+            context.session.say(text, allow_interruptions=False, add_to_chat_ctx=False)
+            self.transcript.add("agent", text)
+        except RuntimeError as e:  # speech scheduling paused (session closing)
+            log.warning("hold update not spoken: %s", e)
 
     async def end_call(
         self,
