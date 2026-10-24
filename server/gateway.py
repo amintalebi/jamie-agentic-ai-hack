@@ -7,9 +7,12 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -31,10 +34,32 @@ class InboundMessage(BaseModel):
     poll_id: str | None = None         # id of the poll the vote belongs to (what send_poll returned)
 
 
+# iMessage effects (Linq names). Screen effects fill the screen, bubble effects animate the bubble.
+EFFECTS = {
+    **{n: "screen" for n in ("confetti", "fireworks", "lasers", "sparkles", "celebration", "hearts",
+                             "love", "balloons", "happy_birthday", "echo", "spotlight")},
+    **{n: "bubble" for n in ("slam", "loud", "gentle", "invisible")},
+}
+# Tapbacks on the user's latest message.
+REACTIONS = ("love", "like", "dislike", "laugh", "emphasize", "question")
+
+
 class Messenger(Protocol):
-    async def send_text(self, to: str, text: str) -> None: ...
+    async def send_text(self, to: str, text: str, effect: str | None = None) -> None:
+        """effect: one of EFFECTS, e.g. "confetti"; ignored where unsupported."""
+        ...
+
     async def send_poll(self, to: str, question: str, options: list[str]) -> str | None:
         """Returns an id that later votes on this poll carry as InboundMessage.poll_id (None if unknown)."""
+        ...
+
+    async def set_status(self, to: str, text: str, new: bool = False) -> None:
+        """One status bubble per user that edits itself in place; new=True starts a fresh bubble."""
+        ...
+
+    async def send_file(self, to: str, filename: str, content_type: str, data: bytes) -> None: ...
+    async def react(self, to: str, reaction: str) -> bool:
+        """Tapback on the user's latest message. False if there is no message to react to."""
         ...
 
     async def set_typing(self, to: str, on: bool) -> None: ...
@@ -47,9 +72,22 @@ class FakeMessenger:
     def __init__(self) -> None:
         self.sent: list[dict] = []  # inspect in tests
 
-    async def send_text(self, to: str, text: str) -> None:
-        self.sent.append({"to": to, "text": text})
-        log.info("[fake send_text] to=%s %r", mask_phone(to), mask_text(text))
+    async def send_text(self, to: str, text: str, effect: str | None = None) -> None:
+        self.sent.append({"to": to, "text": text, "effect": effect})
+        log.info("[fake send_text] to=%s %r effect=%s", mask_phone(to), mask_text(text), effect)
+
+    async def set_status(self, to: str, text: str, new: bool = False) -> None:
+        self.sent.append({"to": to, "status": text, "new": new})
+        log.info("[fake set_status] to=%s %r new=%s", mask_phone(to), mask_text(text), new)
+
+    async def send_file(self, to: str, filename: str, content_type: str, data: bytes) -> None:
+        self.sent.append({"to": to, "file": filename, "content_type": content_type, "data": data})
+        log.info("[fake send_file] to=%s %s (%d bytes)", mask_phone(to), filename, len(data))
+
+    async def react(self, to: str, reaction: str) -> bool:
+        self.sent.append({"to": to, "reaction": reaction})
+        log.info("[fake react] to=%s %s", mask_phone(to), reaction)
+        return True
 
     async def send_poll(self, to: str, question: str, options: list[str]) -> str | None:
         poll_id = uuid.uuid4().hex[:8]
@@ -86,6 +124,8 @@ class LinqMessenger:
         self._chat_ids: dict[str, str] = {}                 # user handle -> Linq chat id
         self._poll_options: dict[str, dict[str, str]] = {}  # poll message id -> {option_id: text}
         self._numbered: dict[str, list[str]] = {}           # user -> options of a numbered-text fallback
+        self._status: dict[str, dict] = {}                  # user -> {"id", "edits", "at"} of the status bubble
+        self._last_inbound: dict[str, str] = {}             # user -> id of their latest message
 
     async def _request(self, method: str, path: str, **kw) -> dict:
         start = time.monotonic()
@@ -102,11 +142,69 @@ class LinqMessenger:
     def remember_chat(self, user: str, chat_id: str) -> None:
         self._chat_ids[user] = chat_id
 
-    async def send_text(self, to: str, text: str) -> None:
-        body = {"to": [to], "message": {"parts": [{"type": "text", "value": text}]}}
-        data = await self._request("POST", "/messages", json=body)
+    def remember_inbound(self, user: str, message_id: str) -> None:
+        self._last_inbound[user] = message_id
+
+    async def _send(self, to: str, parts: list[dict], effect: str | None = None) -> dict:
+        message: dict = {"parts": parts}
+        if effect:
+            if effect in EFFECTS:
+                message["effect"] = {"type": EFFECTS[effect], "name": effect}
+            else:
+                log.warning("unknown effect %r, sending without it", effect)
+        data = await self._request("POST", "/messages", json={"to": [to], "message": message})
         self._chat_ids[to] = data["chat_id"]
-        log.info("sent text to %s: %r", mask_phone(to), mask_text(text))
+        return data
+
+    async def send_text(self, to: str, text: str, effect: str | None = None) -> None:
+        await self._send(to, [{"type": "text", "value": text}], effect)
+        log.info("sent text to %s: %r%s", mask_phone(to), mask_text(text), f" ({effect})" if effect else "")
+
+    # Linq allows 5 edits per message, within 15 minutes of sending it.
+    STATUS_MAX_EDITS = 5
+    STATUS_MAX_AGE_S = 14 * 60
+
+    async def set_status(self, to: str, text: str, new: bool = False) -> None:
+        bubble = self._status.get(to)
+        if (bubble and not new and bubble["edits"] < self.STATUS_MAX_EDITS
+                and time.monotonic() - bubble["at"] < self.STATUS_MAX_AGE_S):
+            try:
+                await self._request("PATCH", f"/messages/{bubble['id']}", json={"text": text})
+                bubble["edits"] += 1
+                log.info("status for %s edited (%d/5): %r", mask_phone(to), bubble["edits"], mask_text(text))
+                return
+            except LinqError as e:
+                log.warning("status edit failed, sending a new bubble: %s", e)
+        data = await self._send(to, [{"type": "text", "value": text}])
+        self._status[to] = {"id": data["message"]["id"], "edits": 0, "at": time.monotonic()}
+        log.info("status for %s started: %r", mask_phone(to), mask_text(text))
+
+    async def send_file(self, to: str, filename: str, content_type: str, data: bytes) -> None:
+        """Pre-upload (POST /v3/attachments, then PUT to the presigned URL), then send it as a media part."""
+        up = await self._request("POST", "/attachments", json={
+            "filename": filename, "content_type": content_type, "size_bytes": len(data)})
+        r = await self._files.request(up.get("http_method", "PUT"), up["upload_url"],
+                                      content=data, headers=up.get("required_headers") or {})
+        if r.is_error:
+            raise LinqError(f"attachment upload: {r.status_code} {r.text[:200]}")
+        await self._send(to, [{"type": "media", "attachment_id": up["attachment_id"]}])
+        log.info("sent file %s (%d bytes) to %s", filename, len(data), mask_phone(to))
+
+    async def react(self, to: str, reaction: str) -> bool:
+        message_id = self._last_inbound.get(to) or await self._latest_inbound(to)
+        if message_id is None:
+            return False
+        await self._request("POST", f"/messages/{message_id}/reactions", json={"operation": "add", "type": reaction})
+        return True
+
+    async def _latest_inbound(self, user: str) -> str | None:
+        """After a restart we have not seen the user's messages yet: ask Linq for the chat history."""
+        chat_id = self._chat_ids.get(user)
+        if chat_id is None:
+            return None
+        data = await self._request("GET", f"/chats/{chat_id}/messages", params={"limit": 20})
+        theirs = [m for m in data.get("messages", []) if not m.get("is_from_me")]
+        return max(theirs, key=lambda m: m["created_at"])["id"] if theirs else None
 
     async def send_poll(self, to: str, question: str, options: list[str]) -> str | None:
         await self.send_text(to, question)  # also guarantees the chat exists: a poll can't start a chat
@@ -160,13 +258,61 @@ class LinqMessenger:
 messenger: Messenger = LinqMessenger() if settings.MESSENGER_MODE == "linq" else FakeMessenger()
 
 
-async def send_text(to: str, text: str) -> None:
-    await messenger.send_text(to, text)
+async def send_text(to: str, text: str, effect: str | None = None) -> None:
+    """effect: an iMessage effect from EFFECTS, e.g. "confetti" for a successful booking."""
+    await messenger.send_text(to, text, effect)
 
 
 async def send_poll(to: str, question: str, options: list[str]) -> str | None:
     """Send a poll; returns its id so votes can be matched to it."""
     return await messenger.send_poll(to, question, options)
+
+
+async def set_status(to: str, text: str, new: bool = False) -> None:
+    """Show progress in one bubble that edits itself ("Calling..." -> "On hold..." -> "Booked").
+    new=True starts a fresh bubble, e.g. for a new call. Falls back to a new bubble when Linq's
+    edit limit (5 edits, 15 minutes) is reached."""
+    await messenger.set_status(to, text, new)
+
+
+async def react(to: str, reaction: str) -> bool:
+    """Tapback (one of REACTIONS) on the user's latest message. False if there is none."""
+    if reaction not in REACTIONS:
+        raise ValueError(f"unknown reaction {reaction!r}, use one of {REACTIONS}")
+    return await messenger.react(to, reaction)
+
+
+BERLIN = ZoneInfo("Europe/Berlin")
+
+
+def build_ics(title: str, start: datetime, duration_minutes: int = 120, location: str = "", notes: str = "") -> bytes:
+    """A one-event iCalendar file. A naive start is taken as Berlin time; times are written in UTC."""
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=BERLIN)
+    begin = start.astimezone(timezone.utc)
+    end = begin + timedelta(minutes=duration_minutes)
+    fmt = "%Y%m%dT%H%M%SZ"
+
+    def esc(text: str) -> str:
+        return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Jamie//iMessage assistant//EN", "METHOD:PUBLISH",
+             "BEGIN:VEVENT", f"UID:{uuid.uuid4()}@jamie-agentic-hack.app",
+             f"DTSTAMP:{datetime.now(timezone.utc):{fmt}}", f"DTSTART:{begin:{fmt}}", f"DTEND:{end:{fmt}}",
+             f"SUMMARY:{esc(title)}"]
+    if location:
+        lines.append(f"LOCATION:{esc(location)}")
+    if notes:
+        lines.append(f"DESCRIPTION:{esc(notes)}")
+    lines += ["END:VEVENT", "END:VCALENDAR"]
+    return ("\r\n".join(lines) + "\r\n").encode()
+
+
+async def send_calendar_invite(to: str, title: str, start: datetime, duration_minutes: int = 120,
+                               location: str = "", notes: str = "") -> None:
+    """Send an .ics file; tapping it in iMessage offers "Add to Calendar"."""
+    filename = (re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower() or "event")[:40] + ".ics"
+    await messenger.send_file(to, filename, "text/calendar", build_ics(title, start, duration_minutes, location, notes))
 
 
 _seen_ids: set[str] = set()
@@ -248,6 +394,8 @@ async def parse_linq_event(event: dict) -> InboundMessage | None:
         linq.remember_chat(sender, chat["id"])
 
     if etype == "message.received":
+        if linq:
+            linq.remember_inbound(sender, data["id"])
         parts = data.get("parts") or []
         text = " ".join(p.get("value", "") for p in parts if p.get("type") == "text").strip()
         audio = next((p["url"] for p in parts

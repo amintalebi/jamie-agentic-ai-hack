@@ -4,3 +4,4 @@ psycopg[binary]==3.3.6
 psycopg-pool==3.3.3
 httpx==0.28.1
 python-dotenv==1.2.4
+tzdata==2026.5    # zoneinfo data for Europe/Berlin (slim images ship without it)
