@@ -15,6 +15,13 @@ services:
       timeout: 3s
       retries: 15
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrantdata:/qdrant/storage
+
   server:
     build:
       context: .
@@ -22,11 +29,14 @@ services:
     env_file: .env   # cp .env.example .env first
     environment:
       DATABASE_URL: postgresql://jamie:jamie@db:5432/jamie
+      QDRANT_URL: http://qdrant:6333
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+      qdrant:
+        condition: service_started
 
   web:
     build: ./web          # dashboard PWA at http://localhost:8080/app/, /api proxied to API_URL
@@ -39,3 +49,4 @@ services:
 
 volumes:
   pgdata:
+  qdrantdata:
