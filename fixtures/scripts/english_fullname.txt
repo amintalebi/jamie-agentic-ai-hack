@@ -1,0 +1,17 @@
+# Replays the 24 Oct call that went wrong: the business wants the family name, the brief only has a
+# first name. The agent must ask with an open question, relay the typed name and not give up.
+# brief: fixtures/brief_italian_en.json
+B: Roma Restaurant, good evening?
+# expect no ask_user
+B: Sure, nine works. What's the full name?
+# expect say matches Sina
+B: No, the full name, the family name.
+# expect ask_user
+# expect say matches One moment please, let me check\.
+U: Sina Rahimi
+# expect say matches Rahimi
+B: Can you spell that?
+# expect no ask_user
+B: Great, you're booked, see you!
+# expect end_call outcome=success
+# expect goodbye
