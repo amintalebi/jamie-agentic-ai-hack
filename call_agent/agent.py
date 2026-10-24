@@ -21,6 +21,7 @@ Env, all read after load_dotenv:
   ELEVENLABS_VOICE_ID_EN     optional; falls back to the DE voice
   CALL_AMD                   1 = answering machine detection before speaking; default 0 for the demo
   CALL_PREEMPTIVE            1 = start the LLM on the eager transcript (lower latency); default 1
+  CALL_NOISE_CANCEL          1 = LiveKit Cloud telephony noise cancellation on the callee's audio; default 1
   CALL_STT                   elevenlabs (default: Scribe v2 realtime, VAD turn detection) or reson8 (STT turn detection)
   CALL_DIAL_TIMEOUT_S        default 45
   CALL_SILENCE_OPEN_S        default 3; the agent opens after this much silence, or as soon as the callee pauses
@@ -62,6 +63,11 @@ from livekit.agents import (  # noqa: E402
 from livekit.agents.llm import ChatMessage  # noqa: E402
 from livekit.agents.utils import is_given  # noqa: E402
 from livekit.plugins import anthropic, elevenlabs, reson8  # noqa: E402
+
+try:  # LiveKit Cloud noise cancellation tuned for phone audio; optional
+    from livekit.plugins import noise_cancellation  # noqa: E402
+except ImportError:  # pragma: no cover
+    noise_cancellation = None
 
 from config import call_llm_model  # noqa: E402
 from contracts_local import CallBrief, CallEvent  # noqa: E402  TODO(hack): switch to server.contracts
@@ -370,7 +376,9 @@ async def call_session(ctx: JobContext) -> None:
     await ctx.connect()
     # Start the session before dialing so nothing the callee says is missed (LiveKit's outbound
     # examples do the same). The agent stays silent until the callee speaks or open_if_silent fires.
-    room_opts = room_io.RoomOptions(participant_identity=sip_identity, close_on_disconnect=True) if mode != "console" else room_io.RoomOptions()
+    audio_in = room_io.AudioInputOptions(noise_cancellation=noise_cancellation.BVCTelephony()) if noise_cancellation and env_flag("CALL_NOISE_CANCEL", True) else room_io.AudioInputOptions()
+    room_opts = (room_io.RoomOptions(participant_identity=sip_identity, close_on_disconnect=True, audio_input=audio_in)
+                 if mode != "console" else room_io.RoomOptions())
     await session.start(agent=agent, room=ctx.room, room_options=room_opts)
 
     if mode == "console":
