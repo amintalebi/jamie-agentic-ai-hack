@@ -146,8 +146,10 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .bubble { padding: 8px 12px; border-radius: 16px; background: var(--neutral-bg); overflow-wrap: anywhere; }
 .line-agent .bubble { background: var(--agent-bg); color: var(--agent-text); }
 
-.token { max-width: 420px; }
-.token input, .token button { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
-.token button { background: var(--accent); color: #fff; border: 0; font-weight: 600; cursor: pointer; }
-.token button:disabled { opacity: 0.5; cursor: default; }
+.phone { max-width: 420px; }
+.phone input, .phone button, .logout { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.phone button { background: var(--accent); color: #fff; border: 0; font-weight: 600; cursor: pointer; }
+.phone button:disabled { opacity: 0.5; cursor: default; }
+.logout { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; }
+.logout:hover { color: var(--text); }
 .error { color: var(--bad); }

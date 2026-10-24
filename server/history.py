@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS calls (
     ended_at    timestamptz
 );
 CREATE INDEX IF NOT EXISTS calls_created_at ON calls (created_at DESC);
+CREATE INDEX IF NOT EXISTS calls_user_id ON calls (user_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS call_events (
     id          bigserial PRIMARY KEY,
     call_id     text NOT NULL REFERENCES calls (call_id) ON DELETE CASCADE,
@@ -72,9 +73,9 @@ class HistoryStore(Protocol):
     async def add_call(self, brief: CallBrief) -> None: ...
     async def add_event(self, call_id: str, type: str, text: str, options: list[str] | None = None,
                         result: CallEvent | None = None) -> None: ...
-    async def list_calls(self, limit: int = 50) -> list[dict]: ...
-    async def stats(self, since: datetime) -> dict[str, int]: ...
-    async def get_call(self, call_id: str) -> dict | None: ...
+    async def list_calls(self, user_id: str, limit: int = 50) -> list[dict]: ...
+    async def stats(self, user_id: str, since: datetime) -> dict[str, int]: ...
+    async def get_call(self, call_id: str, user_id: str = "") -> dict | None: ...
 
 
 class MemoryHistory:
@@ -108,14 +109,18 @@ class MemoryHistory:
             call.update(outcome=result.outcome, summary=result.text, details=result.details,
                         transcript=result.transcript, ended_at=now)
 
-    async def list_calls(self, limit: int = 50) -> list[dict]:
-        rows = sorted(self.calls.values(), key=lambda c: c["created_at"], reverse=True)[:limit]
+    async def list_calls(self, user_id: str, limit: int = 50) -> list[dict]:
+        rows = (sorted(self.calls.values(), key=lambda c: c["created_at"], reverse=True)
+                if not user_id
+                else sorted([c for c in self.calls.values() if c["user_id"] == user_id],
+                            key=lambda c: c["created_at"], reverse=True))
+        rows = rows[:limit]
         keep = ("call_id", "brief", "status", "outcome", "created_at", "updated_at", "ended_at")
         return [{k: c[k] for k in keep} for c in rows]
 
-    async def stats(self, since: datetime) -> dict[str, int]:
+    async def stats(self, user_id: str, since: datetime) -> dict[str, int]:
         now = _now()
-        calls = list(self.calls.values())
+        calls = [c for c in self.calls.values() if not user_id or c["user_id"] == user_id]
         return {
             "live": sum(c["status"] in LIVE_STATUSES and not is_stale(c, now) for c in calls),
             "recent": sum(c["created_at"] >= since for c in calls),
@@ -123,8 +128,11 @@ class MemoryHistory:
             "failed": sum(c["status"] == "failed" or c["outcome"] == "failed" or is_stale(c, now) for c in calls),
         }
 
-    async def get_call(self, call_id: str) -> dict | None:
-        return self.calls.get(call_id)
+    async def get_call(self, call_id: str, user_id: str = "") -> dict | None:
+        call = self.calls.get(call_id)
+        if call is not None and user_id and call["user_id"] != user_id:
+            return None
+        return call
 
 
 # Live-but-past-its-limit, in SQL (same rule as is_stale).
@@ -173,15 +181,16 @@ class PostgresHistory:
                 await conn.execute("UPDATE calls SET status = %s, updated_at = now() WHERE call_id = %s",
                                    (status, call_id))
 
-    async def list_calls(self, limit: int = 50) -> list[dict]:
+    async def list_calls(self, user_id: str, limit: int = 50) -> list[dict]:
         async with db.pool.connection() as conn:
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute(
                 "SELECT call_id, brief, status, outcome, created_at, updated_at, ended_at"
-                " FROM calls ORDER BY created_at DESC LIMIT %s", (limit,))
+                " FROM calls WHERE %s = '' OR user_id = %s"
+                " ORDER BY created_at DESC LIMIT %s", (user_id, user_id, limit))
             return await cur.fetchall()
 
-    async def stats(self, since: datetime) -> dict[str, int]:
+    async def stats(self, user_id: str, since: datetime) -> dict[str, int]:
         async with db.pool.connection() as conn:
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute(
@@ -189,13 +198,14 @@ class PostgresHistory:
                 f" count(*) FILTER (WHERE created_at >= %s) AS recent,"
                 f" count(*) FILTER (WHERE outcome = 'success') AS succeeded,"
                 f" count(*) FILTER (WHERE status = 'failed' OR outcome = 'failed' OR {_STALE_SQL}) AS failed"
-                f" FROM calls", (since,))
+                f" FROM calls WHERE %s = '' OR user_id = %s", (since, user_id, user_id))
             return dict(await cur.fetchone())
 
-    async def get_call(self, call_id: str) -> dict | None:
+    async def get_call(self, call_id: str, user_id: str = "") -> dict | None:
         async with db.pool.connection() as conn:
             cur = conn.cursor(row_factory=dict_row)
-            await cur.execute("SELECT * FROM calls WHERE call_id = %s", (call_id,))
+            await cur.execute("SELECT * FROM calls WHERE call_id = %s AND (%s = '' OR user_id = %s)",
+                              (call_id, user_id, user_id))
             call = await cur.fetchone()
             if call is None:
                 return None
@@ -274,16 +284,16 @@ def note(call_id: str, type: str, text: str) -> None:
 
 # --- reads for the dashboard ---------------------------------------------------
 
-async def list_calls(limit: int = 50) -> list[dict]:
-    return await store.list_calls(limit)
+async def list_calls(user_id: str, limit: int = 50) -> list[dict]:
+    return await store.list_calls(user_id, limit)
 
 
-async def stats(since: datetime) -> dict[str, int]:
-    return await store.stats(since)
+async def stats(user_id: str, since: datetime) -> dict[str, int]:
+    return await store.stats(user_id, since)
 
 
-async def get_call(call_id: str) -> dict | None:
-    return await store.get_call(call_id)
+async def get_call(call_id: str, user_id: str = "") -> dict | None:
+    return await store.get_call(call_id, user_id)
 
 
 def recent_cutoff() -> datetime:

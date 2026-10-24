@@ -1,6 +1,6 @@
 import { Renderer } from "@openuidev/react-lang";
 import { useEffect, useState } from "react";
-import { AuthError, ConfigError, fetchScreen, setToken, stripToken, tokenFromHash, type Screen } from "./api";
+import { clearPhone, fetchScreen, getPhone, normalisePhone, setPhone, type Screen } from "./api";
 import { library } from "./library";
 
 const LIVE_POLL_MS = 2000;
@@ -25,26 +25,18 @@ function apiPath(hash: string): string {
 type State =
   | { kind: "loading" }
   | { kind: "ok"; screen: Screen; at: Date; stale: boolean }
-  | { kind: "auth"; message: string }
-  | { kind: "config" }
+  | { kind: "auth" }
   | { kind: "error"; message: string };
 
 export function App() {
   const hash = useHashRoute();
   const path = apiPath(hash);
   const [state, setState] = useState<State>({ kind: "loading" });
-  const [authTick, setAuthTick] = useState(0);
+  const [loginTick, setLoginTick] = useState(0);
+  const [phone, setPhoneState] = useState(getPhone);
 
-  // Pick up a token from the link once ("#token=..." or "#/calls/id?token=..."), then drop it from the URL.
-  useEffect(() => {
-    const token = tokenFromHash(location.hash);
-    if (token) {
-      setToken(token);
-      history.replaceState(null, "", location.pathname + stripToken(location.hash));
-      dispatchEvent(new HashChangeEvent("hashchange"));
-      setAuthTick((t) => t + 1);
-    }
-  }, []);
+  // No token, no OTP, no JWT: a phone number is all the login we need (hackathon demo).
+  const loggedIn = Boolean(normalisePhone(phone));
 
   useEffect(() => {
     let timer: number | undefined;
@@ -57,20 +49,12 @@ export function App() {
       ctrl = new AbortController();
       let live = false;
       try {
-        const screen = await fetchScreen(path, ctrl.signal);
+        const screen = await fetchScreen(path, phone, ctrl.signal);
         live = screen.live;
         setState({ kind: "ok", screen, at: new Date(), stale: false });
       } catch (e) {
         inFlight = false;
         if (stopped || (e as Error).name === "AbortError") return;
-        if (e instanceof AuthError) {
-          setState({ kind: "auth", message: e.message });
-          return; // wait for a token
-        }
-        if (e instanceof ConfigError) {
-          setState({ kind: "config" });
-          return;
-        }
         setState((s) => (s.kind === "ok" ? { ...s, stale: true } : { kind: "error", message: String(e) }));
       }
       inFlight = false;
@@ -92,7 +76,7 @@ export function App() {
       ctrl?.abort();
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [path, authTick]);
+  }, [path, phone, loginTick]);
 
   return (
     <div className="shell">
@@ -106,43 +90,58 @@ export function App() {
             {state.stale ? "Offline, showing last data" : `Updated ${state.at.toLocaleTimeString()}`}
           </span>
         )}
+        {loggedIn && (
+          <button type="button" className="logout" onClick={() => { clearPhone(); setPhoneState(""); }}>
+            Sign out
+          </button>
+        )}
       </header>
-      {state.kind === "loading" && <div className="page muted">Loading…</div>}
-      {state.kind === "error" && <div className="page card error">Could not load: {state.message}</div>}
-      {state.kind === "config" && (
-        <div className="page card error">
-          The server has no dashboard token set. Add DASHBOARD_TOKEN to the server's .env and restart it.
-        </div>
-      )}
-      {state.kind === "auth" && <TokenForm message={state.message} onSaved={() => setAuthTick((t) => t + 1)} />}
-      {state.kind === "ok" && (
-        <Renderer
-          response={state.screen.ui}
-          library={library}
-          isStreaming={false}
-          onError={(errors) => errors.length && console.warn("[dashboard] OpenUI errors", errors)}
-        />
+      {!loggedIn && <PhoneForm onSaved={(p) => { setPhone(p); setPhoneState(p); setLoginTick((t) => t + 1); }} />}
+      {loggedIn && (
+        <>
+          {state.kind === "loading" && <div className="page muted">Loading…</div>}
+          {state.kind === "error" && <div className="page card error">Could not load: {state.message}</div>}
+          {state.kind === "ok" && (
+            <Renderer
+              response={state.screen.ui}
+              library={library}
+              isStreaming={false}
+              onError={(errors) => errors.length && console.warn("[dashboard] OpenUI errors", errors)}
+            />
+          )}
+        </>
       )}
     </div>
   );
 }
 
-function TokenForm({ message, onSaved }: { message: string; onSaved: () => void }) {
+function PhoneForm({ onSaved }: { onSaved: (phone: string) => void }) {
   const [value, setValue] = useState("");
   return (
     <form
-      className="page card token"
+      className="page card phone"
       onSubmit={(e) => {
         e.preventDefault();
-        setToken(value.trim());
-        onSaved();
+        const p = normalisePhone(value);
+        if (p) {
+          setPhone(p);
+          onSaved(p);
+        }
       }}
     >
-      <h2>Dashboard token</h2>
-      <p className="muted">Enter the DASHBOARD_TOKEN from the server's .env.</p>
-      {message && <p className="muted small">{message}</p>}
-      <input type="password" value={value} onChange={(e) => setValue(e.target.value)} autoFocus aria-label="Token" />
-      <button type="submit" disabled={!value.trim()}>Open dashboard</button>
+      <h2>Your phone number</h2>
+      <p className="muted">Log in with the number you text Jamie from. No password, straight in.</p>
+      <input
+        type="tel"
+        inputMode="tel"
+        autoComplete="tel"
+        placeholder="+49 151 0000 1234"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        autoFocus
+        aria-label="Phone number"
+      />
+      <button type="submit" disabled={!normalisePhone(value)}>See my calls</button>
     </form>
   );
 }

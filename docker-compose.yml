@@ -28,5 +28,14 @@ services:
       db:
         condition: service_healthy
 
+  web:
+    build: ./web          # dashboard PWA at http://localhost:8080/app/, /api proxied to API_URL
+    environment:
+      API_URL: https://api.jamie-agentic-hack.app/   # live backend (Dokploy); swap to http://server:8000 for a fully local stack
+    ports:
+      - "8080:8080"
+    depends_on:
+      - server
+
 volumes:
   pgdata:

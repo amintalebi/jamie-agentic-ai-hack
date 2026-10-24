@@ -59,7 +59,7 @@ docker compose up --build
 curl localhost:8000/health
 ```
 
-The call monitor (an installable PWA) is at `http://localhost:8000/app/#token=<DASHBOARD_TOKEN>`. It shows the call history, the live state of each call, any question waiting on you, the timeline and the transcript.
+The call monitor (an installable PWA) is at `http://localhost:8080/app/`. Enter the phone number you text Jamie from and you're straight in (no signup, no OTP). It shows that number's call history, the live state of each call, any question waiting on you, the timeline and the transcript.
 
 Full setup, as components land:
 
