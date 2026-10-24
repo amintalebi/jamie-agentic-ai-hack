@@ -72,6 +72,9 @@ The worker log shows the dial, "answered after N s", each turn with its latency 
 | `CALL_LLM_MODEL` | claude-haiku-4-5 | See `config.py`. Haiku 5.5 works too: `agent.py` turns its default thinking off (the plugin cannot carry thinking blocks across tool calls) |
 | `CALL_STT` | elevenlabs | Scribe v2 realtime with VAD turn detection. `reson8` restores Reson8 with its server-side turn detection |
 | `CALL_AGENT_NAME` | jamie-call-agent | Must match the server's `.env` |
+| `CALL_AUDIO_TAGS` | 0 | 1 lets the LLM start a reply with one ElevenLabs tone tag (`[warm]`, `[apologetic]`, ...) rendered by Eleven v4 Turbo. Tags are stripped from transcripts |
+| `ELEVENLABS_STABILITY` | unset | 0.5 is the natural setting for v4; lower is more expressive |
+| `CALL_NOISE_CANCEL` | 1 | LiveKit Cloud telephony noise cancellation on the callee's audio |
 
 ## Measured 24 Oct, 13:50 to 14:00, on the hackathon wifi
 
@@ -103,3 +106,16 @@ CALL_BRIEF_FILE=fixtures/brief_italian.json .venv/bin/python call_agent/agent.py
 
 Open items: a German library voice on the ElevenLabs account (the API key cannot add voices); one segfault in
 `liblivekit_ffi.dylib` (livekit-rtc 1.1.21) seen once in four calls, LiveKit retried the job automatically.
+
+## Booking call 5, 14:41 (English, fixture brief, caller "Alex", Sina as the restaurant)
+
+Full flow in 101 s: greeting and request, restaurant offers nine instead of eight, hold and poll, accepted;
+name given; deposit, hold and poll, accepted; "am I talking to a computer?" answered honestly; one-sentence
+summary, corrected from pounds to euros on the restaurant's objection; goodbye; `end_call` posted success
+with date, time, persons, name, seating and deposit. Per turn: callee turn closed 0.5 s after end of speech,
+STT final 0.42 to 0.46 s, LLM first token 0.51 to 0.65 s, TTS first audio 0.11 to 0.14 s, end to end 1.2 to 2.1 s.
+
+Fixed after it: the agent opened on the first pause, over the rest of the greeting, with a thirty-word
+sentence. It now waits for the STT to commit the greeting (fallbacks: 3 s of silence, 7 s without a committed
+turn), and `call_agent/style.py` adds a phone-style layer on top of E's prompt: one short sentence per reply,
+details when asked, no filler, optional tone tags.

@@ -22,6 +22,8 @@ Env, all read after load_dotenv:
   CALL_AMD                   1 = answering machine detection before speaking; default 0 for the demo
   CALL_PREEMPTIVE            1 = start the LLM on the eager transcript (lower latency); default 1
   CALL_NOISE_CANCEL          1 = LiveKit Cloud telephony noise cancellation on the callee's audio; default 1
+  CALL_AUDIO_TAGS            1 = let the LLM prefix replies with an ElevenLabs tone tag such as [warm]; default 0
+  ELEVENLABS_STABILITY       optional 0..1 voice stability (0.5 = natural); similarity fixed at 0.75
   CALL_STT                   elevenlabs (default: Scribe v2 realtime, VAD turn detection) or reson8 (STT turn detection)
   CALL_DIAL_TIMEOUT_S        default 45
   CALL_SILENCE_OPEN_S        default 3; the agent opens after this much silence, or as soon as the callee pauses
@@ -73,6 +75,7 @@ from config import call_llm_model  # noqa: E402
 from contracts_local import CallBrief, CallEvent  # noqa: E402  TODO(hack): switch to server.contracts
 from events import EventsClient, mask_phone  # noqa: E402
 from prompts import build_instructions, opening_line  # noqa: E402
+from style import strip_tags, style_addendum  # noqa: E402
 from tools import Transcript, make_tools  # noqa: E402
 
 AGENT_NAME = os.getenv("CALL_AGENT_NAME") or "jamie-call-agent"  # same variable the server uses to dispatch
@@ -153,6 +156,9 @@ def build_session(brief: CallBrief) -> AgentSession:
     )
     if voice:
         tts_kwargs["voice_id"] = voice
+    if os.getenv("ELEVENLABS_STABILITY"):
+        tts_kwargs["voice_settings"] = elevenlabs.VoiceSettings(
+            stability=float(os.environ["ELEVENLABS_STABILITY"]), similarity_boost=0.75)
     else:
         log.warning("ELEVENLABS_VOICE_ID_DE not set, using the plugin's default English voice")
     if os.getenv("CALL_STT", "elevenlabs").lower() == "reson8":
@@ -190,6 +196,7 @@ class CallState:
     callee_paused: asyncio.Event = field(default_factory=asyncio.Event)  # set on speaking -> not speaking
     ended: bool = False          # end_call ran, or we posted a final event ourselves
     turn: int = 0                # assistant turns completed
+    business_turns: int = 0      # callee turns committed by the STT
     opened: bool = False         # we forced the opening line
     last_user_metrics: dict = field(default_factory=dict)
 
@@ -210,10 +217,11 @@ def wire_events(session: AgentSession, ctx: JobContext, brief: CallBrief, transc
         item = ev.item
         if not isinstance(item, ChatMessage):
             return
-        text = (item.text_content or "").strip()
+        text = strip_tags(item.text_content or "")
         metrics = dict(item.metrics or {})
         if item.role == "user":
             state.user_spoke = True
+            state.business_turns += 1
             transcript.add("business", text)
             state.last_user_metrics = metrics
             log.info("business: %s", text)
@@ -284,35 +292,32 @@ async def graceful_shutdown(ctx: JobContext, reason: str) -> None:
     ctx.shutdown(reason)
 
 
-async def open_conversation(session: AgentSession, state: CallState, brief: CallBrief, silence_s: float, max_wait_s: float = 6.0) -> None:
-    """Say the first line without waiting for the STT to close the callee's turn.
+async def open_conversation(session: AgentSession, state: CallState, brief: CallBrief, silence_s: float, max_wait_s: float = 7.0) -> None:
+    """Listen first, then make sure the agent speaks.
 
-    First dial tests (24 Oct): the callee greets at pickup and keeps saying "Hallo?" into a silent line,
-    so Reson8 never sees a pause and closes the turn only after ~16 s. We open as soon as the callee
-    pauses (VAD), or after silence_s if nobody speaks, or after max_wait_s at the latest."""
-    waiter = asyncio.create_task(state.callee_paused.wait())
-    try:
-        await asyncio.wait_for(asyncio.shield(waiter), timeout=silence_s)
-        reason = "callee paused"
-    except asyncio.TimeoutError:
-        if state.user_state == "speaking":
-            try:
-                await asyncio.wait_for(asyncio.shield(waiter), timeout=max(max_wait_s - silence_s, 0.1))
-                reason = "callee paused"
-            except asyncio.TimeoutError:
-                reason = f"callee still talking after {max_wait_s:.0f}s"
-        else:
+    Normal path: the callee greets, the STT commits that turn about a second after they stop, and the
+    LLM answers with the opening line (E's prompt). This only steps in when that does not happen:
+    nobody spoke for silence_s, or the callee has been talking for max_wait_s with no committed turn
+    (seen with Reson8 on noisy lines). Booking call 5 (24 Oct) showed opening on the first pause
+    talks over the rest of the greeting, so a pause alone is no longer a trigger."""
+    deadline = time.monotonic() + max_wait_s
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.25)
+        if state.ended or state.turn > 0 or state.business_turns > 0:
+            return  # the normal path is handling it
+        since = time.monotonic() - (state.answered_at or time.monotonic())
+        if not state.user_spoke and since >= silence_s:
             reason = f"silence for {silence_s:.0f}s"
-    finally:
-        waiter.cancel()
-    if state.ended or state.turn > 0 or state.opened:
+            break
+    else:
+        reason = f"no committed callee turn after {max_wait_s:.0f}s"
+    if state.ended or state.turn > 0 or state.business_turns > 0 or state.opened:
         return
     state.opened = True
     log.info("opening (%s)", reason)
     session.generate_reply(
-        instructions=f'Open the call now with exactly "{opening_line(brief)}" and then state the request in one sentence. '
-                     "If the callee is mid-sentence, keep it short.",
-        allow_interruptions=False,
+        instructions=f'Open now with exactly "{opening_line(brief)}" plus one short sentence with the core request. '
+                     "Under twenty words in total.",
     )
 
 
@@ -366,7 +371,7 @@ async def call_session(ctx: JobContext) -> None:
     transcript = Transcript()
     state = CallState()
     session = build_session(brief)
-    instructions = hello_instructions(brief) if mode == "hello" else build_instructions(brief)
+    instructions = hello_instructions(brief) if mode == "hello" else build_instructions(brief) + style_addendum(brief)
     agent = Agent(instructions=instructions, tools=make_tools(brief, events, transcript))
     sip_identity = f"sip-{brief.call_id}"
     wire_events(session, ctx, brief, transcript, state, events, sip_identity)
