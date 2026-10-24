@@ -69,7 +69,22 @@ The worker log shows the dial, "answered after N s", each turn with its latency 
 | `CALL_DIAL_TIMEOUT_S` | 45 | Ring window |
 | `CALL_SILENCE_OPEN_S` | 3 | Open the conversation if the callee stays silent after pickup |
 | `ELEVENLABS_TTS_MODEL` | eleven_flash_v2_5 | TTS model |
-| `CALL_LLM_MODEL` | claude-haiku-4-5 | See `config.py` (role E measured 4.5 faster than 5.5) |
+| `CALL_LLM_MODEL` | claude-haiku-4-5 | See `config.py`. Haiku 5.5 works too: `agent.py` turns its default thinking off (the plugin cannot carry thinking blocks across tool calls) |
+| `CALL_STT` | reson8 | `elevenlabs` switches to Scribe realtime with VAD turn detection, if Reson8 misbehaves on real calls |
+| `CALL_AGENT_NAME` | jamie-call-agent | Must match the server's `.env` |
+
+## Measured 24 Oct, 13:50 to 14:00, on the hackathon wifi
+
+| What | Result |
+| --- | --- |
+| Reson8 streaming, 9 s German sample | eager end-of-turn transcript 0.37 to 0.44 s after end of speech; final 0.98 to 1.44 s; transcript exact |
+| Reson8 prerecorded, same sample | 0.9 to 3.2 s per request |
+| Haiku 4.5 time to first token, 4 runs each, via the Anthropic SDK and via the LiveKit plugin | 0.62 to 2.31 s, medians 0.78 to 1.47 s |
+| Haiku 5.5 with thinking off, same | 0.58 to 2.62 s, medians 1.22 to 1.49 s |
+| Haiku 5.5 default (thinking on), max_tokens 80 | spends the whole budget thinking, no text at all |
+
+The network was noisy (single runs varied 3x), so the two Haikus are within noise. 4.5 stays the default. The main lever
+is `CALL_PREEMPTIVE=1`, which starts the LLM on Reson8's eager transcript about 0.4 s after the speaker stops.
 
 ## Console mode (no phone, tests STT, LLM and TTS on your laptop)
 

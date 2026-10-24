@@ -21,6 +21,7 @@ Env, all read after load_dotenv:
   ELEVENLABS_VOICE_ID_EN     optional; falls back to the DE voice
   CALL_AMD                   1 = answering machine detection before speaking; default 0 for the demo
   CALL_PREEMPTIVE            1 = start the LLM on the eager transcript (lower latency); default 1
+  CALL_STT                   reson8 (default) or elevenlabs (Scribe realtime, VAD turn detection)
   CALL_DIAL_TIMEOUT_S        default 45
   CALL_SILENCE_OPEN_S        default 3
   CALL_BRIEF_FILE            console mode only; default fixtures/brief_italian.json
@@ -45,6 +46,7 @@ load_dotenv(ROOT / ".env")
 from livekit import api, rtc  # noqa: E402
 from livekit.agents import (  # noqa: E402
     AMD,
+    NOT_GIVEN,
     Agent,
     AgentServer,
     AgentSession,
@@ -57,6 +59,7 @@ from livekit.agents import (  # noqa: E402
     room_io,
 )
 from livekit.agents.llm import ChatMessage  # noqa: E402
+from livekit.agents.utils import is_given  # noqa: E402
 from livekit.plugins import anthropic, elevenlabs, reson8  # noqa: E402
 
 from config import call_llm_model  # noqa: E402
@@ -65,7 +68,7 @@ from events import EventsClient, mask_phone  # noqa: E402
 from prompts import build_instructions, opening_line  # noqa: E402
 from tools import Transcript, make_tools  # noqa: E402
 
-AGENT_NAME = "jamie-call-agent"
+AGENT_NAME = os.getenv("CALL_AGENT_NAME") or "jamie-call-agent"  # same variable the server uses to dispatch
 log = logging.getLogger("call_agent")
 
 
@@ -80,16 +83,17 @@ def allowed_numbers() -> set[str]:
     return {n.strip() for n in os.getenv("ALLOWED_CALL_NUMBERS", "").split(",") if n.strip()}
 
 
-def parse_job(ctx: JobContext) -> tuple[CallBrief, str]:
-    """Returns (brief, mode). mode is "call", "hello" (dial_test) or "console" (no phone)."""
+def parse_job(ctx: JobContext) -> tuple[CallBrief, str, str | None]:
+    """Returns (brief, mode, server_url). mode is "call", "hello" (dial_test) or "console" (no phone).
+    server_url lets dial_test point events at the fake server; the real server never sets it."""
     raw = ctx.job.metadata or ""
     if not raw.strip():
         path = Path(os.getenv("CALL_BRIEF_FILE") or ROOT / "fixtures" / "brief_italian.json")
         log.info("no dispatch metadata, console mode with brief %s", path)
-        return CallBrief.model_validate_json(path.read_text()), "console"
+        return CallBrief.model_validate_json(path.read_text()), "console", None
     data = json.loads(raw)
     brief = CallBrief.model_validate(data)
-    return brief, ("hello" if data.get("mode") == "hello" else "call")
+    return brief, ("hello" if data.get("mode") == "hello" else "call"), data.get("server_url")
 
 
 def hello_instructions(brief: CallBrief) -> str:
@@ -111,6 +115,20 @@ def hello_instructions(brief: CallBrief) -> str:
     )
 
 
+class CallLLM(anthropic.LLM):
+    """anthropic.LLM that turns extended thinking off on Haiku 5.5.
+
+    Haiku 5.5 thinks by default and the LiveKit plugin does not carry thinking blocks across
+    tool calls, so a thinking turn before ask_user/end_call would fail. Measured 24 Oct on this
+    laptop (median TTFT, 4 runs): Haiku 4.5 1.47 s, Haiku 5.5 thinking off 1.22 s, both noisy."""
+
+    def chat(self, *, extra_kwargs=NOT_GIVEN, **kwargs):
+        extra = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        if str(self.model).startswith("claude-haiku-5"):
+            extra.setdefault("thinking", {"type": "disabled"})
+        return super().chat(extra_kwargs=extra, **kwargs)
+
+
 def build_session(brief: CallBrief) -> AgentSession:
     voice = os.getenv("ELEVENLABS_VOICE_ID_DE") or ""
     if brief.language == "en" and os.getenv("ELEVENLABS_VOICE_ID_EN"):
@@ -124,14 +142,23 @@ def build_session(brief: CallBrief) -> AgentSession:
         tts_kwargs["voice_id"] = voice
     else:
         log.warning("ELEVENLABS_VOICE_ID_DE not set, using the plugin's default English voice")
+    if os.getenv("CALL_STT", "reson8").lower() == "elevenlabs":
+        # Fallback STT: ElevenLabs Scribe realtime. No server-side turn detection, so the bundled VAD decides turns.
+        stt = elevenlabs.STT(api_key=os.environ["ELEVENLABS_API_KEY"], use_realtime=True, language_code=brief.language)
+        turn_detection = "vad"
+    else:
+        # Reson8 streams with server-side turn detection. Measured 24 Oct (9 s German sample): eager
+        # end-of-turn transcript ~0.4 s after the speaker stops, final ~1.0 to 1.4 s after.
+        stt = reson8.STT(language=brief.language)
+        turn_detection = "stt"
     return AgentSession(
-        stt=reson8.STT(language=brief.language),  # streams with server-side turn detection
-        llm=anthropic.LLM(model=call_llm_model(), max_tokens=200, temperature=0.4),
+        stt=stt,
+        llm=CallLLM(model=call_llm_model(), max_tokens=200),  # no temperature: Haiku 5.5 rejects it with a 400
         tts=elevenlabs.TTS(**tts_kwargs),
-        # Reson8 decides the end of turn; the bundled Silero VAD still handles interruptions.
-        # preemptive_generation starts the LLM on Reson8's eager transcript to cut latency.
+        # The STT (or the bundled Silero VAD) decides the end of turn; the VAD always handles interruptions.
+        # preemptive_generation starts the LLM on the eager transcript to cut latency.
         turn_handling=TurnHandlingOptions(
-            turn_detection="stt",
+            turn_detection=turn_detection,
             preemptive_generation={"enabled": env_flag("CALL_PREEMPTIVE", True)},
         ),
     )
@@ -261,11 +288,13 @@ server = AgentServer()
 
 @server.rtc_session(agent_name=AGENT_NAME)
 async def call_session(ctx: JobContext) -> None:
-    brief, mode = parse_job(ctx)
+    brief, mode, server_url = parse_job(ctx)
     ctx.log_context_fields = {"room": ctx.room.name, "call_id": brief.call_id}
     log.info("job mode=%s call=%s to=%s lang=%s goal=%r", mode, brief.call_id, mask_phone(brief.to_number), brief.language, brief.goal[:80])
 
-    events = EventsClient(os.getenv("SERVER_PUBLIC_URL") or "http://127.0.0.1:8001", brief.call_id)
+    server_url = server_url or os.getenv("SERVER_PUBLIC_URL") or "http://127.0.0.1:8001"
+    log.info("events go to %s", server_url)
+    events = EventsClient(server_url, brief.call_id)
     ctx.add_shutdown_callback(events.aclose)
 
     trunk_id = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID", "")

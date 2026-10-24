@@ -31,7 +31,7 @@ from livekit import api  # noqa: E402
 from contracts_local import CallBrief  # noqa: E402  TODO(hack): switch to server.contracts
 from events import mask_phone  # noqa: E402
 
-AGENT_NAME = "jamie-call-agent"
+AGENT_NAME = os.getenv("CALL_AGENT_NAME") or "jamie-call-agent"
 
 
 def allowed_numbers() -> set[str]:
@@ -61,6 +61,9 @@ async def main() -> int:
     p.add_argument("--lang", choices=["de", "en"], default="de")
     p.add_argument("--brief", help="path to a CallBrief JSON fixture; to_number and call_id are overridden")
     p.add_argument("--watch", type=int, default=150, help="seconds to watch the room before exiting")
+    p.add_argument("--server", default="http://127.0.0.1:8001",
+                   help="where the worker posts CallEvents for this call; default is scripts/fake_server.py. "
+                        "The real server rejects calls it did not place, so leave this on the fake server.")
     args = p.parse_args()
 
     if args.to not in allowed_numbers():
@@ -79,6 +82,7 @@ async def main() -> int:
     else:
         brief = hello_brief(args.to, args.lang, call_id)
         metadata = {**brief.model_dump(), "mode": "hello"}  # agent.py swaps in a tiny hello prompt
+    metadata["server_url"] = args.server
 
     room = f"call-{call_id}"
     async with api.LiveKitAPI() as lk:
