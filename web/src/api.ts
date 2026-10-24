@@ -1,59 +1,123 @@
-const TOKEN_KEY = "jamie.dashboardToken";
+const USER_KEY = "jamie.userPhone";
+
+export function getPhone(): string {
+  try {
+    return localStorage.getItem(USER_KEY) ?? memoryPhone;
+  } catch {
+    return memoryPhone;
+  }
+}
+
+export function setPhone(phone: string): void {
+  try {
+    localStorage.setItem(USER_KEY, phone);
+  } catch {
+    // private mode: phone lasts for this page only
+  }
+  memoryPhone = phone;
+}
+
+export function clearPhone(): void {
+  try {
+    localStorage.removeItem(USER_KEY);
+  } catch {
+    // ignore
+  }
+  memoryPhone = "";
+}
+
+let memoryPhone = "";
+
+/** Normalise a phone string loosely (keep digits and a leading +). */
+export function normalisePhone(raw: string): string {
+  const s = raw.trim().replace(/[\s\-().]/g, "");
+  if (!s) return "";
+  if (s.startsWith("+")) return "+" + s.slice(1).replace(/\D/g, "");
+  return "+" + s.replace(/\D/g, "");
+}
+
+const TOKEN_KEY = "jamie.token";
+let memoryToken = "";
 
 export function getToken(): string {
   try {
-    return localStorage.getItem(TOKEN_KEY) ?? "";
+    return localStorage.getItem(TOKEN_KEY) ?? memoryToken;
+  } catch {
+    return memoryToken;
+  }
+}
+
+export function setToken(token: string): void {
+  memoryToken = token;
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // private mode: token lasts for this page only
+  }
+}
+
+/** Thrown when the session is missing or expired, so the app can show the login form. */
+export class AuthError extends Error {}
+
+/** A failed request; retryAfter (seconds) is set when the server asks us to wait (429). */
+export class ApiError extends Error {
+  constructor(message: string, readonly retryAfter = 0) {
+    super(message);
+  }
+}
+
+async function postJson(url: string, body: unknown): Promise<any> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = typeof data.detail === "string" ? data.detail : `${res.status} ${res.statusText}`;
+    throw new ApiError(message, Number(res.headers.get("retry-after")) || 0);
+  }
+  return data;
+}
+
+/** Ask the server to text a login code to this number; returns seconds until a resend is allowed. */
+export async function requestCode(phone: string): Promise<number> {
+  const data = await postJson("/api/auth/otp", { phone });
+  return Number(data.retry_after) || 0;
+}
+
+/** Check the code; returns the session token and whether this login created the account. */
+export async function verifyCode(phone: string, code: string): Promise<{ token: string; newUser: boolean }> {
+  const data = await postJson("/api/auth/verify", { phone, code });
+  return { token: data.token, newUser: Boolean(data.new_user) };
+}
+
+/**
+ * Android Chrome: read the code from the incoming SMS (WebOTP). Needs the SMS to end with
+ * "@<this host> #<code>" (server APP_DOMAIN). Resolves "" where unsupported or when aborted.
+ * iOS needs no code here: autocomplete="one-time-code" offers the code above the keyboard.
+ */
+export async function readSmsCode(signal: AbortSignal): Promise<string> {
+  if (!("OTPCredential" in window)) return "";
+  try {
+    const cred = (await navigator.credentials.get({ otp: { transport: ["sms"] }, signal } as CredentialRequestOptions)) as
+      | (Credential & { code?: string })
+      | null;
+    return cred?.code ?? "";
   } catch {
     return "";
   }
 }
 
-export function setToken(token: string): void {
-  try {
-    localStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    // private mode: token lasts for this page only
-  }
-  memoryToken = token;
-}
-
-let memoryToken = "";
-
-/** 401: the token is missing or wrong. */
-export class AuthError extends Error {}
-/** 503: the server has no DASHBOARD_TOKEN set, so no token can work. */
-export class ConfigError extends Error {}
-
-/** Token carried in a link: "#token=T" or "#/calls/id?token=T&x=1". */
-export function tokenFromHash(hash: string): string | null {
-  return new URLSearchParams(splitHash(hash)[1]).get("token");
-}
-
-/** The hash without its token param: "#/calls/id?token=T&x=1" -> "#/calls/id?x=1", "#token=T" -> "#/". */
-export function stripToken(hash: string): string {
-  const [route, query] = splitHash(hash);
-  const params = new URLSearchParams(query);
-  params.delete("token");
-  const rest = params.toString();
-  return (route.length > 1 ? route : "#/") + (rest ? `?${rest}` : "");
-}
-
-function splitHash(hash: string): [string, string] {
-  if (hash.startsWith("#token=")) return ["#/", hash.slice(1)];
-  const i = hash.indexOf("?");
-  return i < 0 ? [hash, ""] : [hash.slice(0, i), hash.slice(i + 1)];
-}
-
 export type Screen = { ui: string; live: boolean };
 
 export async function fetchScreen(path: string, signal?: AbortSignal): Promise<Screen> {
-  const token = getToken() || memoryToken;
   const res = await fetch(`/api/dashboard${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
     signal,
+    headers: { authorization: `Bearer ${getToken()}` },
   });
-  if (res.status === 401) throw new AuthError(await res.text());
-  if (res.status === 503) throw new ConfigError(await res.text());
+  if (res.status === 401) throw new AuthError("Session expired, log in again");
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }

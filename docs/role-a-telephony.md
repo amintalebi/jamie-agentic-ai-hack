@@ -51,10 +51,10 @@ The worker log shows the dial, "answered after N s", each turn with its latency 
 
 1. Dispatch arrives with the `CallBrief` JSON as metadata (agent name `jamie-call-agent`).
 2. Number must be in `ALLOWED_CALL_NUMBERS`, else a `failed` event and no call.
-3. Session starts first (Reson8 STT with `turn_detection="stt"`, Claude Haiku, ElevenLabs TTS), then the SIP
-   participant is created with `wait_until_answered`. Rejected, busy or no answer: `failed` event.
-4. `started` event once the callee is in the room. The callee speaks first; after `CALL_SILENCE_OPEN_S` of
-   silence the agent opens itself.
+3. Session starts first (ElevenLabs Scribe realtime STT with VAD turn detection, Claude Haiku, ElevenLabs TTS),
+   then the SIP participant is created with `wait_until_answered`. Rejected, busy or no answer: `failed` event.
+4. `started` event once the callee is in the room. The agent says the opening line as soon as the callee pauses,
+   after `CALL_SILENCE_OPEN_S` of silence, or after 6 s at the latest. It never waits for the STT to close a turn.
 5. Every turn is logged on one line: `stt_final`, `end_of_turn`, `llm_ttft`, `tts_ttfb`, `e2e`.
 6. `end_call` (role E) posts the `result` and deletes the room. If the business hangs up first, `agent.py`
    posts a `partial` result with the transcript. 25 s before `max_call_seconds` the agent is told to wrap up;
@@ -70,8 +70,11 @@ The worker log shows the dial, "answered after N s", each turn with its latency 
 | `CALL_SILENCE_OPEN_S` | 3 | Open the conversation if the callee stays silent after pickup |
 | `ELEVENLABS_TTS_MODEL` | eleven_flash_v2_5 | TTS model |
 | `CALL_LLM_MODEL` | claude-haiku-4-5 | See `config.py`. Haiku 5.5 works too: `agent.py` turns its default thinking off (the plugin cannot carry thinking blocks across tool calls) |
-| `CALL_STT` | reson8 | `elevenlabs` switches to Scribe realtime with VAD turn detection, if Reson8 misbehaves on real calls |
+| `CALL_STT` | elevenlabs | Scribe v2 realtime with VAD turn detection. `reson8` restores Reson8 with its server-side turn detection |
 | `CALL_AGENT_NAME` | jamie-call-agent | Must match the server's `.env` |
+| `CALL_AUDIO_TAGS` | 0 | 1 lets the LLM start a reply with one ElevenLabs tone tag (`[warm]`, `[apologetic]`, ...) rendered by Eleven v4 Turbo. Tags are stripped from transcripts |
+| `ELEVENLABS_STABILITY` | unset | 0.5 is the natural setting for v4; lower is more expressive |
+| `CALL_NOISE_CANCEL` | 1 | LiveKit Cloud telephony noise cancellation on the callee's audio |
 
 ## Measured 24 Oct, 13:50 to 14:00, on the hackathon wifi
 
@@ -91,3 +94,28 @@ is `CALL_PREEMPTIVE=1`, which starts the LLM on Reson8's eager transcript about 
 ```bash
 CALL_BRIEF_FILE=fixtures/brief_italian.json .venv/bin/python call_agent/agent.py console
 ```
+
+## Real calls, 24 Oct 14:15 to 14:31 (four dial tests to a teammate's mobile)
+
+| Call | What happened |
+| --- | --- |
+| 1 | Dial, ring, answer after 9.8 s, STT heard the callee, started and result events posted. Agent silent: every LLM request got a 400 because strict tool schemas reject `end_call(details: dict)`. Fixed with non-strict schemas. |
+| 2 | First job process segfaulted in `liblivekit_ffi` as the SIP audio started; LiveKit re-dispatched and the retry answered after 6.6 s. Agent silent for 8 s because it waited for Reson8 to close the callee's turn. Callee hung up. |
+| 3 | Agent opened 2.3 s after pickup (LLM first token 0.64 s, TTS first audio 0.18 s). Callee answered, but Reson8 closed that turn only after 16 s of short pauses, so the agent never replied. The American voice reading German was hard to understand. |
+| 4 | ElevenLabs Scribe realtime plus VAD: opened 2.1 s after pickup, callee's turn closed 0.75 s after end of speech, reply end to end 1.84 s, `end_call` posted success. |
+
+Open items: a German library voice on the ElevenLabs account (the API key cannot add voices); one segfault in
+`liblivekit_ffi.dylib` (livekit-rtc 1.1.21) seen once in four calls, LiveKit retried the job automatically.
+
+## Booking call 5, 14:41 (English, fixture brief, caller "Alex", Sina as the restaurant)
+
+Full flow in 101 s: greeting and request, restaurant offers nine instead of eight, hold and poll, accepted;
+name given; deposit, hold and poll, accepted; "am I talking to a computer?" answered honestly; one-sentence
+summary, corrected from pounds to euros on the restaurant's objection; goodbye; `end_call` posted success
+with date, time, persons, name, seating and deposit. Per turn: callee turn closed 0.5 s after end of speech,
+STT final 0.42 to 0.46 s, LLM first token 0.51 to 0.65 s, TTS first audio 0.11 to 0.14 s, end to end 1.2 to 2.1 s.
+
+Fixed after it: the agent opened on the first pause, over the rest of the greeting, with a thirty-word
+sentence. It now waits for the STT to commit the greeting (fallbacks: 3 s of silence, 7 s without a committed
+turn), and `call_agent/style.py` adds a phone-style layer on top of E's prompt: one short sentence per reply,
+details when asked, no filler, optional tone tags.

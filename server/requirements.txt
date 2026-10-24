@@ -9,3 +9,4 @@ langchain-core>=0.3.0
 langchain-anthropic>=0.3.0
 langgraph>=0.2.0
 
+tzdata==2026.5    # zoneinfo data for Europe/Berlin (slim images ship without it)

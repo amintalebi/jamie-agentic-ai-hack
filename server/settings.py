@@ -16,6 +16,15 @@ MESSENGER_MODE = env("MESSENGER_MODE", "fake")   # fake | linq
 STT_MODE = env("STT_MODE", "fake")               # fake | scribe
 CALLS_MODE = env("CALLS_MODE", "fake")           # fake | livekit
 MEMORY_MODE = env("MEMORY_MODE", "qdrant")       # qdrant | fake
+SMS_MODE = env("SMS_MODE", "fake")               # fake | twilio (dashboard login codes)
+TWILIO_ACCOUNT_SID = env("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN")
+TWILIO_SMS_FROM = env("TWILIO_SMS_FROM") or env("TWILIO_NUMBER")  # must be SMS-capable
+TWILIO_MESSAGING_SERVICE_SID = env("TWILIO_MESSAGING_SERVICE_SID")  # optional, wins over TWILIO_SMS_FROM
+AUTH_SECRET = env("AUTH_SECRET")                 # signs dashboard sessions; empty = random per restart
+# Host the dashboard PWA is served from. Adds "@host #code" to the login SMS so
+# iOS and Android can autofill the code (origin-bound one-time codes, WebOTP). Empty: plain SMS.
+APP_DOMAIN = env("APP_DOMAIN", "jamie-agentic-hack.app")
 DATABASE_URL = env("DATABASE_URL")               # empty = no database (fakes only)
 QDRANT_URL = env("QDRANT_URL")                   # empty = embedded local Qdrant (QDRANT_PATH or :memory:)
 QDRANT_API_KEY = env("QDRANT_API_KEY")
@@ -26,7 +35,6 @@ ORCHESTRATOR_MODEL = env("ORCHESTRATOR_MODEL", "claude-sonnet-4-6")
 DEMO_USER_NAME = env("DEMO_USER_NAME", "Sina")
 DEMO_BUSINESS_NAME = env("DEMO_BUSINESS_NAME", "Trattoria da Demo")
 CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
-DASHBOARD_TOKEN = env("DASHBOARD_TOKEN")             # bearer token for /api/dashboard
 LINQ_API_KEY = env("LINQ_API_KEY")
 LINQ_WEBHOOK_SECRET = env("LINQ_WEBHOOK_SECRET")     # whsec_...; empty = signatures not checked
 ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY")

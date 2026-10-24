@@ -9,7 +9,7 @@ Hackathon project (Agentic AI Hack, Berlin, Sat 24 Oct 2026). Hard deadline: com
 ## Commands
 
 ```
-docker compose up --build              # Postgres (pgvector) on :5432 + server on :8000
+docker compose up --build              # Postgres (pgvector) :5432, server :8000, dashboard PWA :8080/app/
 curl localhost:8000/health             # checks the DB connection and reports the pgvector version
 docker compose down -v                 # stop and wipe the DB volume (re-runs db/init/*.sql next start)
 ```
@@ -35,9 +35,9 @@ cd web && npm install
 npm run dev          # http://localhost:5173/app/, proxies /api to the server on :8000
 npm test             # parses and renders the server's sample screens
 npm run fixtures     # regenerate those samples after changing server/dashboard.py
-npm run build        # web/dist, served by the server at /app/
+npm run build        # web/dist (a local `uvicorn` also serves it at :8000/app/ if built)
 ```
-Open `http://localhost:8000/app/#token=<DASHBOARD_TOKEN>` once; the token is kept in localStorage.
+In Docker the PWA is its own image (`web/Dockerfile`: Node build stage, then non-root nginx on 8080 serving precompressed files and proxying `/api/` to `API_URL`). Open `http://localhost:8080/app/`, enter your phone number and the 6-digit code texted to it (`server/auth.py`, Twilio SMS with `SMS_MODE=twilio`; in fake mode the code is in the server log as `[fake send_sms]`). Sending retries Twilio hiccups, and each resend this hour waits longer (30/60/120/300 s, max 5 per hour). The SMS ends with `@APP_DOMAIN #code` so iOS and Android autofill it, and the form submits by itself. The first login signs the user up (`server/users.py`, `users` table) and sends a welcome iMessage via Linq; the user counts as activated only once that send succeeds, so it is retried on the next login. The session token is kept in localStorage for 30 days and is signed with `AUTH_SECRET`.
 
 There are no Python tests or lint config yet.
 
@@ -104,7 +104,9 @@ Actual layout differs from the sketch above in two ways:
 - `server/` is a package: run it as `server.main:app` from the repo root and import siblings as `from server import calls`. The server Docker build context is the repo root, so the image includes `common/`.
 
 ### Dashboard (call monitoring)
-`server/history.py` records every call and its timeline (Postgres tables `calls` and `call_events`, created at startup; in memory without `DATABASE_URL`). Writes are queued in the background (in order per call, 10 s timeout) and never raise, so a slow or broken database cannot delay or break a live call. Calls still live at startup are closed as lost, and a live call far past its `max_call_seconds` shows as "lost". `server/dashboard.py` turns that history into screens written in OpenUI Lang (https://openui.com), built in code with no LLM, and serves them at `/api/dashboard/*` behind `DASHBOARD_TOKEN`. `web/` registers the matching components (`web/src/library.tsx`) and renders them with OpenUI's `<Renderer>`, refreshing every 2 s while a call is live.
+`server/history.py` records every call and its timeline (Postgres tables `calls` and `call_events`, created at startup; in memory without `DATABASE_URL`). Writes are queued in the background (in order per call, 10 s timeout) and never raise, so a slow or broken database cannot delay or break a live call. Calls still live at startup are closed as lost, and a live call far past its `max_call_seconds` shows as "lost". `server/dashboard.py` turns that history into screens written in OpenUI Lang (https://openui.com), built in code with no LLM, and serves them at `/api/dashboard/*` for the phone number in the bearer token from `/api/auth/verify`. `web/` registers the matching components (`web/src/library.tsx`) and renders them with OpenUI's `<Renderer>`, refreshing every 2 s while a call is live.
+
+Styling is Tailwind v4 plus shadcn/ui (`web/components.json`; primitives in `web/src/components/ui/`, add more with `cd web && npx shadcn@4.22.1 add <name>`). Theme tokens, brand gradient and animations live in `web/src/index.css`; dark mode follows the OS. Brand pieces (logo, aurora, waveform, confetti) are in `web/src/components/brand.tsx`, and the animated iMessage demo on the sign-in screen is `web/src/components/phone-demo.tsx`.
 
 OpenUI Lang arguments are **positional, in Zod key order**. When you change a component, change the Python call in `dashboard.py` and the schema in `library.tsx` together, then run `npm run fixtures && npm test`. Props the server may send as `null` must be `.optional()` (OpenUI rejects `null` for required props, even `.nullable()` ones).
 
@@ -257,7 +259,7 @@ When a `result` arrives: send the user a 2 to 3 line summary written by Sonnet f
 Fallbacks if behind: drop Mem0; drop voice notes (text only); drop mid-call polls (agent accepts the closest time within 30 min).
 
 ## Conventions
-- Keep it boring: FastAPI, Pydantic, httpx, sqlite3, the official SDKs. No new frameworks.
+- Keep it boring: FastAPI, Pydantic, httpx, sqlite3, the official SDKs. No new frameworks. Exception, agreed for the demo: the PWA (`web/`) uses Tailwind v4 and shadcn/ui on top of React and OpenUI; keep new UI on those rather than adding more.
 - Every external call gets a timeout and a log line. No silent failures: on errors, text the user something sensible.
 - Never log full API keys or full phone numbers (mask all but the last 4 digits).
 - Only ever dial numbers in `ALLOWED_CALL_NUMBERS`.

@@ -38,6 +38,15 @@ services:
       qdrant:
         condition: service_started
 
+  web:
+    build: ./web          # dashboard PWA at http://localhost:8080/app/, /api proxied to API_URL
+    environment:
+      API_URL: http://server:8000   # local stack: the server service on the same network. On Docker, override to the API's internal service (e.g. set on the Dokploy service). No trailing slash.
+    ports:
+      - "8080:8080"
+    depends_on:
+      - server
+
 volumes:
   pgdata:
   qdrantdata:

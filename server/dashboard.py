@@ -7,36 +7,22 @@ in the order of each component's Zod schema keys.
 
     python -m server.dashboard web/src/__fixtures__   # dump sample screens for the web tests
 """
-import hmac
 import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from common.masking import mask_phone
-from server import history, settings
+from server import auth, history
 
 log = logging.getLogger("server.dashboard")
 router = APIRouter(prefix="/api/dashboard")
 
 WEB_DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
-
-
-# --- auth --------------------------------------------------------------------
-
-def require_token(authorization: str = Header(default="")) -> None:
-    token = settings.DASHBOARD_TOKEN
-    if not token:
-        if settings.MESSENGER_MODE == "fake" and settings.CALLS_MODE == "fake":
-            return  # local dev on fakes: open
-        raise HTTPException(503, "set DASHBOARD_TOKEN to use the dashboard")
-    given = authorization.removeprefix("Bearer ").strip()
-    if not hmac.compare_digest(given.encode(), token.encode()):
-        raise HTTPException(401, "bad dashboard token")
 
 
 # --- OpenUI Lang builder -------------------------------------------------------
@@ -163,21 +149,22 @@ def call_screen(call: dict) -> tuple[str, bool]:
         p.add("KeyValue", "Allowed alone", "; ".join(brief.get("allowed_decisions", [])) or "nothing"),
         p.add("KeyValue", "Must ask you", "; ".join(brief.get("must_ask_user_for", [])) or "nothing"),
     ]))
-    return p.render("Page", "Call", call["call_id"], children), live
+    # Empty title: the CallHeader card already names this screen.
+    return p.render("Page", "", None, children), live
 
 
 # --- routes --------------------------------------------------------------------
 
-@router.get("/calls", dependencies=[Depends(require_token)])
-async def calls_view(limit: int = 50) -> dict:
-    calls = await history.list_calls(min(max(limit, 1), 200))
-    ui, live = calls_screen(calls, await history.stats(history.recent_cutoff()))
+@router.get("/calls")
+async def calls_view(limit: int = 50, user: str = Depends(auth.current_user)) -> dict:
+    calls = await history.list_calls(user, min(max(limit, 1), 200))
+    ui, live = calls_screen(calls, await history.stats(user, history.recent_cutoff()))
     return {"ui": ui, "live": live}
 
 
-@router.get("/calls/{call_id}", dependencies=[Depends(require_token)])
-async def call_view(call_id: str) -> dict:
-    call = await history.get_call(call_id)
+@router.get("/calls/{call_id}")
+async def call_view(call_id: str, user: str = Depends(auth.current_user)) -> dict:
+    call = await history.get_call(call_id, user)
     if call is None:
         raise HTTPException(404, "unknown call")
     ui, live = call_screen(call)
