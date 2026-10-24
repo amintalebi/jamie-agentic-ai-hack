@@ -20,3 +20,4 @@ B: Moment, bin ich hier mit einem Computer?
 B: Alles klar, bis morgen!
 # expect no ask_user
 # expect end_call outcome=success
+# expect poll english

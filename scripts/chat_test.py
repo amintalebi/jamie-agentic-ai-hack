@@ -11,7 +11,8 @@ Uses call_agent.prompts.build_instructions(brief). Tools:
 
 Script format: "B: <business line>", "U: <poll answer>" (queued for the next ask_user),
 "# expect ask_user" / "# expect no ask_user" / "# expect say matches <regex>" (about the
-preceding B: turn), "# expect end_call outcome=success|partial" (whole call),
+preceding B: turn), "# expect end_call outcome=success|partial" and "# expect poll english"
+(whole call; checks the polls as posted, so only translated with --server),
 "# brief: <path>" (default brief). Other "#" lines are comments.
 """
 import argparse
@@ -33,7 +34,7 @@ sys.path.insert(0, str(ROOT / "call_agent"))
 from config import call_llm_model  # noqa: E402
 from contracts_local import CallBrief  # noqa: E402  TODO(hack): switch to server.contracts
 from prompts import build_instructions  # noqa: E402
-from tools import Transcript  # noqa: E402
+from tools import Transcript, looks_german  # noqa: E402
 
 TOOLS = [
     {
@@ -91,8 +92,10 @@ class StubTools:
 
     def __init__(self, answers: deque | None = None):
         self.answers = answers
+        self.polls: list[tuple[str, list[str]]] = []  # raw from the model (no translation here)
 
     async def ask_user(self, question: str, options: list[str]) -> str:
+        self.polls.append((question, options))
         if self.answers is None:
             answer = input("USER ANSWER (empty = timeout)> ").strip()
         else:
@@ -113,6 +116,7 @@ class RealTools:
 
         self.events = EventsClient(server, brief.call_id)
         self.impl = CallTools(brief, self.events, transcript)
+        self.polls = self.impl.polls  # as posted to the server, after translation
 
     async def ask_user(self, question: str, options: list[str]) -> str:
         print("  (waiting for answer from server...)")
@@ -219,7 +223,8 @@ def parse_script(path: Path) -> tuple[str | None, list[ScriptTurn], list[str]]:
             brief_path = s.split(":", 1)[1].strip()
         elif s.startswith("# expect "):
             exp = s[len("# expect "):].strip()
-            (call_expects if exp.startswith("end_call") else turns[-1].expects).append(exp)
+            call_level = exp.startswith(("end_call", "poll"))
+            (call_expects if call_level else turns[-1].expects).append(exp)
     return brief_path, turns, call_expects
 
 
@@ -237,7 +242,10 @@ def check_turn(exp: str, turn: TurnLog | None) -> tuple[bool, str]:
     return False, f"unknown expectation {exp!r}"
 
 
-def check_call(exp: str, call: CallLog) -> tuple[bool, str]:
+def check_call(exp: str, call: CallLog, polls: list[tuple[str, list[str]]]) -> tuple[bool, str]:
+    if exp == "poll english":
+        german = [p for p in polls if looks_german(*p)]
+        return not german, f"german polls={german}" if german else f"{len(polls)} polls"
     if not call.ended:
         return False, "end_call never called"
     m = re.match(r"end_call(?:\s+outcome=(\S+))?$", exp)
@@ -285,7 +293,7 @@ async def run_script(client, model: str, effort: str, brief: CallBrief, script: 
             ok, why = check_turn(exp, log)
             results.append((f"{t.line[:40]!r}: {exp}", ok, why))
     for exp in call_expects:
-        ok, why = check_call(exp, call)
+        ok, why = check_call(exp, call, tools.polls)
         results.append((exp, ok, why))
 
     print("\n-- results --")

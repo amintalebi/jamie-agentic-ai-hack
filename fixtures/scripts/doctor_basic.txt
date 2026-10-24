@@ -12,3 +12,4 @@ B: Gut, dann trage ich Sina für Donnerstag halb zehn ein. Bitte die Versicherte
 # expect no ask_user
 B: Wunderbar, bis Donnerstag, auf Wiederhören!
 # expect end_call outcome=success
+# expect poll english

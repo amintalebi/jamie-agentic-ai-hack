@@ -13,3 +13,4 @@ B: Oh, Entschuldigung, ich sehe gerade, am Sonntag ist bei uns Ruhetag. Da haben
 U: No
 B: Schade, tut mir leid. Auf Wiederhören!
 # expect end_call outcome=failed|partial
+# expect poll english
