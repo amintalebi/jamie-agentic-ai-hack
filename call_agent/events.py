@@ -1,6 +1,8 @@
 """HTTP client that posts CallEvents to the server and long-polls for the user's answer."""
+import asyncio
 import logging
 import os
+import time
 
 import httpx
 
@@ -19,6 +21,31 @@ class EventsClient:
         secret = os.getenv("CALL_EVENTS_SECRET", "").strip()
         headers = {"Authorization": f"Bearer {secret}"} if secret else {}
         self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
+        self._tasks: set[asyncio.Task] = set()
+        self._last_partial = ("", 0.0)
+
+    def post_line(self, speaker: str, text: str, final: bool = True) -> None:
+        """Live transcript line for the dashboard (POST /calls/{id}/transcript). Fire and forget:
+        never awaited by the call, errors are logged once at debug level. Partials are throttled."""
+        text = (text or "").strip()
+        if not text:
+            return
+        if not final:
+            last_text, last_at = self._last_partial
+            if text == last_text or time.monotonic() - last_at < 0.3:
+                return
+            self._last_partial = (text, time.monotonic())
+        task = asyncio.create_task(self._post_line(speaker, text, final))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _post_line(self, speaker: str, text: str, final: bool) -> None:
+        url = f"{self.server_url}/calls/{self.call_id}/transcript"
+        try:
+            r = await self._client.post(url, json={"speaker": speaker, "text": text, "final": final}, timeout=3.0)
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            log.debug("transcript line not posted call=%s: %s", self.call_id, e)
 
     async def post(self, event: CallEvent) -> None:
         """POST {server_url}/calls/{call_id}/events. Logs and swallows errors so the call keeps going."""

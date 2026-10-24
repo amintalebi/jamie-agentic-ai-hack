@@ -13,11 +13,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from common.masking import mask_phone
-from server import auth, history
+from server import auth, history, live
 
 log = logging.getLogger("server.dashboard")
 router = APIRouter(prefix="/api/dashboard")
@@ -128,6 +128,10 @@ def call_screen(call: dict) -> tuple[str, bool]:
               brief.get("language", ""), _iso(call["created_at"]), _duration_s(call),
               int(brief.get("max_call_seconds", 240))),
     ]
+    if live:
+        # Third child on purpose: the Page keys children by position, so the live transcript keeps
+        # its place (and its open stream) while questions and timeline items come and go.
+        children.append(p.add("LiveTranscript", call["call_id"]))
     events = call.get("events", [])
     if status == "waiting_user":
         q = next((e for e in reversed(events) if e["type"] == "question"), None)
@@ -141,7 +145,7 @@ def call_screen(call: dict) -> tuple[str, bool]:
     children.append(p.add("Section", "Timeline", [
         p.add("TimelineItem", e["type"], _EVENT_LABELS.get(e["type"], e["type"]), e["text"], _iso(e["created_at"]))
         for e in events]))
-    if call.get("transcript"):
+    if call.get("transcript") and not live:
         children.append(p.add("Section", "Transcript", [
             p.add("TranscriptLine", "agent" if t.get("speaker") == "agent" else "business", str(t.get("text", "")))
             for t in call["transcript"]]))
@@ -169,6 +173,20 @@ async def call_view(call_id: str, user: str = Depends(auth.current_user)) -> dic
         raise HTTPException(404, "unknown call")
     ui, live = call_screen(call)
     return {"ui": ui, "live": live}
+
+
+@router.get("/calls/{call_id}/live")
+async def call_live(call_id: str, user: str = Depends(auth.current_user)) -> StreamingResponse:
+    """Server-Sent Events: the call's transcript as it happens (see server/live.py)."""
+    call = await history.get_call(call_id, user)
+    if call is None:
+        raise HTTPException(404, "unknown call")
+    return StreamingResponse(
+        live.stream(call_id, already_ended=not _is_live(call)),
+        media_type="text/event-stream",
+        # X-Accel-Buffering: nginx in front of us must pass events through, not buffer them.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def mount_app(app: FastAPI) -> None:
