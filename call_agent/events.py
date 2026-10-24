@@ -1,5 +1,6 @@
 """HTTP client that posts CallEvents to the server and long-polls for the user's answer."""
 import logging
+import os
 
 import httpx
 
@@ -14,7 +15,10 @@ class EventsClient:
         self.server_url = server_url.rstrip("/")
         self.call_id = call_id
         self.timeout = timeout
-        self._client = httpx.AsyncClient(timeout=timeout)
+        # The server rejects these routes without CALL_EVENTS_SECRET once it has one set.
+        secret = os.getenv("CALL_EVENTS_SECRET", "").strip()
+        headers = {"Authorization": f"Bearer {secret}"} if secret else {}
+        self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
 
     async def post(self, event: CallEvent) -> None:
         """POST {server_url}/calls/{call_id}/events. Logs and swallows errors so the call keeps going."""

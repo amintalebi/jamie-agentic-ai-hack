@@ -18,6 +18,7 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    FilterSelector,
     MatchValue,
     PayloadSchemaType,
     PointStruct,
@@ -77,8 +78,11 @@ def _embed_text(text: str, dim: int = _VECTOR_DIM) -> list[float]:
     return vec
 
 
-def _default_facts() -> dict[str, str]:
-    """Identity a never-seen user starts with, so the demo works against an empty database."""
+def _default_facts(user_id: str) -> dict[str, str]:
+    """Identity a never-seen user starts with. Only the demo phones (DEMO_USERS) get the demo identity,
+    so the demo works against an empty database; everyone else starts with nothing and is asked."""
+    if user_id not in settings.demo_users():
+        return {}
     return {"name": settings.DEMO_USER_NAME, "usual_italian": settings.DEMO_BUSINESS_NAME}
 
 
@@ -115,6 +119,7 @@ class MemoryStore(Protocol):
     async def recent_messages(self, user_id: str, limit: int = 20) -> list[dict]: ...
     async def save_call(self, brief: CallBrief, result: CallEvent) -> None: ...
     async def find_business(self, query: str) -> list[dict]: ...
+    async def forget(self, user_id: str) -> None: ...
 
 
 class InMemoryStore:
@@ -125,7 +130,7 @@ class InMemoryStore:
         self.businesses = _seed_businesses()
 
     async def get_facts(self, user_id: str) -> dict[str, str]:
-        return self.facts.setdefault(user_id, _default_facts())
+        return self.facts.setdefault(user_id, _default_facts(user_id))
 
     async def remember(self, user_id: str, key: str, value: str) -> None:
         (await self.get_facts(user_id))[key] = value
@@ -138,6 +143,11 @@ class InMemoryStore:
 
     async def save_call(self, brief: CallBrief, result: CallEvent) -> None:
         self.calls.append({"brief": brief.model_dump(), "result": result.model_dump()})
+
+    async def forget(self, user_id: str) -> None:
+        self.facts.pop(user_id, None)
+        self.messages.pop(user_id, None)
+        self.calls = [c for c in self.calls if c["brief"].get("user_id") != user_id]
 
     async def find_business(self, query: str) -> list[dict]:
         q = query.lower()
@@ -259,7 +269,7 @@ class QdrantMemoryStore:
             with_vectors=False,
         )
         if not records:
-            defaults = _default_facts()
+            defaults = _default_facts(user_id)
             for k, v in defaults.items():
                 await self._upsert_fact_point(client, user_id, k, v)
             return dict(defaults)
@@ -329,6 +339,14 @@ class QdrantMemoryStore:
             collection_name=CALLS_COLLECTION,
             points=[PointStruct(id=point_id, vector=_embed_text(summary_text), payload=payload)],
         )
+
+    async def forget(self, user_id: str) -> None:
+        """Delete everything stored for this user: facts, messages and call records."""
+        client = await self._ensure_ready()
+        selector = FilterSelector(filter=Filter(
+            must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))]))
+        for collection in (FACTS_COLLECTION, MESSAGES_COLLECTION, CALLS_COLLECTION):
+            await client.delete(collection_name=collection, points_selector=selector, wait=True)
 
     async def find_business(self, query: str) -> list[dict]:
         client = await self._ensure_ready()
@@ -411,6 +429,11 @@ async def save_call(brief: CallBrief, result: CallEvent) -> None:
 
 async def find_business(query: str) -> list[dict]:
     return await store.find_business(query)
+
+
+async def forget(user_id: str) -> None:
+    """Account deletion: drop the user's facts, messages and call records."""
+    await store.forget(user_id)
 
 
 async def upsert_business(name: str, kind: str, phone: str, notes: str = "") -> None:

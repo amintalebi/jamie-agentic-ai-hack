@@ -22,11 +22,11 @@ import time
 from typing import Protocol
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from common.masking import mask_phone, mask_text
-from server import settings, users
+from server import history, memory, settings, users
 
 log = logging.getLogger("server.auth")
 router = APIRouter(prefix="/api/auth")
@@ -208,31 +208,52 @@ def _b64(b: bytes) -> str:
 
 
 def make_token(phone: str, now: float | None = None) -> str:
-    payload = f"{phone}|{int((now or time.time()) + TOKEN_TTL_S)}".encode()
+    """HMAC-signed "phone|expiry|issued-at (ms)". The issue time lets logout revoke older tokens."""
+    now = now or time.time()
+    payload = f"{phone}|{int(now + TOKEN_TTL_S)}|{int(now * 1000)}".encode()
     sig = hmac.new(_secret, payload, hashlib.sha256).digest()
     return f"{_b64(payload)}.{_b64(sig)}"
 
 
-def read_token(token: str, now: float | None = None) -> str | None:
-    """The phone number a valid token belongs to, or None."""
+def read_claims(token: str, now: float | None = None) -> tuple[str, int] | None:
+    """(phone, issued-at in ms) of a validly signed, unexpired token, or None."""
     try:
         p, s = token.split(".", 1)
         payload = base64.urlsafe_b64decode(p + "=" * (-len(p) % 4))
         sig = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
         if not hmac.compare_digest(sig, hmac.new(_secret, payload, hashlib.sha256).digest()):
             return None
-        phone, exp = payload.decode().split("|")
-        return phone if int(exp) > (now or time.time()) else None
+        phone, exp, *rest = payload.decode().split("|")
+        iat_ms = int(rest[0]) if rest else (int(exp) - TOKEN_TTL_S) * 1000  # tokens from before logout existed
+        return (phone, iat_ms) if int(exp) > (now or time.time()) else None
     except (ValueError, UnicodeDecodeError):
         return None
 
 
+def read_token(token: str, now: float | None = None) -> str | None:
+    """The phone number a validly signed, unexpired token belongs to, or None (no account check)."""
+    claims = read_claims(token, now)
+    return claims[0] if claims else None
+
+
 async def current_user(authorization: str = Header(default="")) -> str:
-    """FastAPI dependency: the logged-in phone number, or 401."""
+    """FastAPI dependency: the logged-in phone number, or 401. The account must still exist and the
+    token must be newer than the last logout."""
     scheme, _, token = authorization.partition(" ")
-    phone = read_token(token.strip()) if scheme.lower() == "bearer" else None
-    if not phone:
+    claims = read_claims(token.strip()) if scheme.lower() == "bearer" else None
+    if not claims:
         raise HTTPException(401, "not logged in")
+    phone, iat_ms = claims
+    try:
+        row = await users.get(phone)
+    except Exception:
+        log.exception("account lookup for %s failed", mask_phone(phone))
+        raise HTTPException(503, "Could not check your login, try again in a moment")
+    if row is None:
+        raise HTTPException(401, "account not found")
+    revoked = row.get("sessions_revoked_at")
+    if revoked is not None and iat_ms <= revoked.timestamp() * 1000:
+        raise HTTPException(401, "logged out")
     return phone
 
 
@@ -323,3 +344,42 @@ async def verify_code(req: VerifyRequest, background: BackgroundTasks) -> dict:
     if not user.get("activated_at"):
         background.add_task(users.activate, phone)  # welcome iMessage, after the response
     return {"token": make_token(phone), "phone": phone, "new_user": bool(user["new"])}
+
+
+# --- account -----------------------------------------------------------------------
+
+@router.post("/logout")
+async def logout(user: str = Depends(current_user)) -> dict:
+    """Log out on every device: all tokens issued until now stop working."""
+    await users.revoke_sessions(user)
+    log.info("logged out everywhere: %s", mask_phone(user))
+    return {"ok": True}
+
+
+@router.get("/export")
+async def export_account(user: str = Depends(current_user)) -> dict:
+    """Everything we store about the user: account, remembered facts, messages and calls."""
+    calls = [await history.get_call(c["call_id"], user) for c in await history.list_calls(user, 1000)]
+    log.info("data export for %s", mask_phone(user))
+    return {"exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "account": await users.get(user),
+            "facts": await memory.get_facts(user),
+            "messages": await memory.recent_messages(user, 0),
+            "calls": [c for c in calls if c is not None]}
+
+
+@router.delete("/account")
+async def delete_account(user: str = Depends(current_user)) -> dict:
+    """Delete the account and everything stored for it. Safe to retry if a step fails.
+    The account row goes last, so a half-finished delete still lets the user log in and retry."""
+    try:
+        deleted_calls = await history.delete_user(user)
+        await memory.forget(user)
+        await users.delete(user)
+    except Exception:
+        log.exception("account deletion for %s failed", mask_phone(user))
+        raise HTTPException(502, "Could not delete everything, try again in a moment")
+    _codes.pop(user, None)
+    _sends.pop(user, None)
+    log.info("account deleted: %s (%d calls)", mask_phone(user), deleted_calls)
+    return {"deleted": True, "calls": deleted_calls}
