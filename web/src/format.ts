@@ -21,6 +21,7 @@ export function statusLook(status: string, outcome: string | null | undefined): 
     case "active": return { label: "On the call", tone: "live" };
     case "waiting_user": return { label: "Waiting for you", tone: "warn" };
     case "failed": return { label: "Failed", tone: "bad" };
+    case "lost": return { label: "Lost contact", tone: "bad" };
     case "ended":
       if (outcome === "success") return { label: "Done", tone: "good" };
       if (outcome === "partial") return { label: "Partly done", tone: "warn" };

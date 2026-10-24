@@ -111,13 +111,13 @@ async def place_call(brief: CallBrief) -> str:
         brief = brief.model_copy(update={"call_id": uuid.uuid4().hex[:12]})
     _calls[brief.call_id] = CallState(brief=brief)
     log.info("placing call %s to %s via %s", brief.call_id, mask_phone(brief.to_number), settings.CALLS_MODE)
-    await history.call_placed(brief)  # before dispatch, so the first events find the row
+    history.call_placed(brief)  # queued first, so this call's later writes find the row
     try:
         await dispatcher.dispatch(brief)
     except Exception as e:
         _calls.pop(brief.call_id, None)
         log.exception("dispatch failed for call %s", brief.call_id)
-        await history.event_received(CallEvent(call_id=brief.call_id, type="failed", text="Could not start the call"))
+        history.event_received(CallEvent(call_id=brief.call_id, type="failed", text="Could not start the call"))
         raise CallRefused("could not start the call") from e
     return brief.call_id
 
@@ -132,26 +132,35 @@ def active_calls(user_id: str) -> list[CallBrief]:
     return [s.brief for s in _calls.values() if s.brief.user_id == user_id and s.status != "ended"]
 
 
+def _waiting_calls(user_id: str) -> list[tuple[str, CallState]]:
+    """Calls of this user that are on hold waiting for the user's answer."""
+    return [(cid, s) for cid, s in _calls.items()
+            if s.brief.user_id == user_id and s.status != "ended" and s.question is not None]
+
+
 def pending_question(user_id: str) -> str | None:
-    """call_id of the call waiting on this user's answer, or None."""
-    for call_id, s in _calls.items():
-        if s.brief.user_id == user_id and s.status != "ended" and s.question is not None:
-            return call_id
-    return None
+    """call_id of a call waiting on this user's answer, or None."""
+    waiting = _waiting_calls(user_id)
+    return waiting[0][0] if waiting else None
 
 
 def match_vote(user_id: str, option: str, poll_id: str | None) -> str | None:
     """call_id whose pending question this vote answers, or None (then it is an orchestrator poll vote).
-    Matches on poll_id when the messenger gives one. Without a poll_id it only matches when exactly one
-    call is waiting and the option is one of its question's options."""
-    waiting = [(cid, s) for cid, s in _calls.items()
-               if s.brief.user_id == user_id and s.status != "ended" and s.question is not None]
+
+    1. A poll_id that matches a call's poll decides it.
+    2. Otherwise fall back to the option, among calls whose poll id we do not know (the messenger gave
+       none, or the vote beat us storing it): exactly one such call, and the option is one of its options.
+    """
+    waiting = _waiting_calls(user_id)
     if poll_id is not None:
-        return next((cid for cid, s in waiting if s.poll_id == poll_id), None)
+        hit = next((cid for cid, s in waiting if s.poll_id == poll_id), None)
+        if hit:
+            return hit
+        waiting = [(cid, s) for cid, s in waiting if s.poll_id is None]
     if len(waiting) != 1:
         return None
     cid, state = waiting[0]
-    options = [o.lower() for o in (state.question.options or [])]
+    options = [o.strip().lower() for o in (state.question.options or [])]
     return cid if option.strip().lower() in options else None
 
 
@@ -166,7 +175,7 @@ async def resolve_answer(call_id: str, answer: str) -> None:
     state.answer = answer
     state.answer_ready.set()
     log.info("answer for call %s: %r", call_id, mask_text(answer))
-    await history.answer_received(call_id, answer)
+    history.answer_received(call_id, answer)
 
 
 def apply_event(event: CallEvent) -> None:
@@ -202,7 +211,7 @@ async def after_event(event: CallEvent) -> None:
                 state.question = None
                 state.answer = None
                 state.answer_ready.set()  # /answer returns null now, the agent says we will call back
-            await history.note(event.call_id, "poll_failed", "Could not send the poll, the agent will offer a call back")
+            history.note(event.call_id, "poll_failed", "Could not send the poll, the agent will offer a call back")
             try:
                 await gateway.send_text(user, f"On the call they asked: {event.text} "
                                               "I could not send you the poll, so I'll say you will call back.")
@@ -222,7 +231,7 @@ async def after_event(event: CallEvent) -> None:
 async def handle_event(event: CallEvent) -> None:
     """apply_event + after_event, inline. For tests and in-process callers."""
     apply_event(event)
-    await history.event_received(event)
+    history.event_received(event)
     await after_event(event)
 
 
@@ -236,7 +245,7 @@ async def post_event(call_id: str, event: CallEvent, background: BackgroundTasks
         apply_event(event)
     except UnknownCall:
         raise HTTPException(404, "unknown call")
-    await history.event_received(event)  # a few ms; keeps the timeline in order
+    history.event_received(event)  # queued: a slow database never delays the agent
     background.add_task(after_event, event)
     return {"ok": True}
 

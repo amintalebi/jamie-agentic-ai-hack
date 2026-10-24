@@ -10,7 +10,7 @@ in the order of each component's Zod schema keys.
 import hmac
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
@@ -24,7 +24,6 @@ log = logging.getLogger("server.dashboard")
 router = APIRouter(prefix="/api/dashboard")
 
 WEB_DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
-LIVE_STATUSES = {"dialing", "active", "waiting_user"}
 
 
 # --- auth --------------------------------------------------------------------
@@ -83,8 +82,22 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat() if dt else None
 
 
+def _status(call: dict) -> str:
+    """Stored status, or "lost" for a call still marked live long past its time limit."""
+    return "lost" if history.is_stale(call) else call["status"]
+
+
+def _is_live(call: dict) -> bool:
+    return _status(call) in history.LIVE_STATUSES
+
+
 def _duration_s(call: dict) -> int:
-    end = call.get("ended_at") or datetime.now(timezone.utc)
+    if call.get("ended_at"):
+        end = call["ended_at"]
+    elif _status(call) == "lost":
+        end = call.get("updated_at") or call["created_at"]  # last sign of life
+    else:
+        end = datetime.now(timezone.utc)
     return max(0, int((end - call["created_at"]).total_seconds()))
 
 
@@ -93,43 +106,44 @@ def _subtitle(call: dict) -> str:
     return f"for {brief.get('caller_name', '?')} · {mask_phone(brief.get('to_number', ''))}"
 
 
-def calls_screen(calls: list[dict]) -> tuple[str, bool]:
+def calls_screen(calls: list[dict], stats: dict[str, int]) -> tuple[str, bool]:
+    """calls: the newest calls; stats: counts over all calls (history.stats)."""
     p = Program()
-    today = datetime.now(timezone.utc).date()
-    live = [c for c in calls if c["status"] in LIVE_STATUSES]
-    stats = p.add("StatRow", [
-        p.add("Stat", "Live now", str(len(live)), "live" if live else "neutral"),
-        p.add("Stat", "Today", str(sum(c["created_at"].date() == today for c in calls)), "neutral"),
-        p.add("Stat", "Succeeded", str(sum(c.get("outcome") == "success" for c in calls)), "good"),
-        p.add("Stat", "Failed", str(sum(c["status"] == "failed" or c.get("outcome") == "failed" for c in calls)), "bad"),
+    stat_row = p.add("StatRow", [
+        p.add("Stat", "Live now", str(stats["live"]), "live" if stats["live"] else "neutral"),
+        p.add("Stat", "Last 24 h", str(stats["recent"]), "neutral"),
+        p.add("Stat", "Succeeded", str(stats["succeeded"]), "good"),
+        p.add("Stat", "Failed", str(stats["failed"]), "bad"),
     ])
     if calls:
         body = p.add("CallList", [
-            p.add("CallRow", c["call_id"], c["brief"].get("goal", ""), _subtitle(c), c["status"],
+            p.add("CallRow", c["call_id"], c["brief"].get("goal", ""), _subtitle(c), _status(c),
                   c.get("outcome"), _iso(c["created_at"]), _duration_s(c))
             for c in calls
         ])
     else:
         body = p.add("Empty", "No calls yet. Ask Jamie to call somewhere and it shows up here live.")
-    return p.render("Page", "Calls", "Live call monitor", [stats, body]), bool(live)
+    return p.render("Page", "Calls", "Live call monitor", [stat_row, body]), any(_is_live(c) for c in calls)
 
 
 _EVENT_LABELS = {"placed": "Placed", "started": "Connected", "question": "Asked you", "answer": "You answered",
-                 "progress": "Progress", "poll_failed": "Poll failed", "result": "Result", "failed": "Failed"}
+                 "progress": "Progress", "poll_failed": "Poll failed", "result": "Result", "failed": "Failed",
+                 "lost": "Lost contact"}
 
 
 def call_screen(call: dict) -> tuple[str, bool]:
     p = Program()
     brief = call["brief"]
-    live = call["status"] in LIVE_STATUSES
+    status = _status(call)
+    live = status in history.LIVE_STATUSES
     children = [
         p.add("BackLink", "All calls", "#/"),
-        p.add("CallHeader", brief.get("goal", ""), _subtitle(call), call["status"], call.get("outcome"),
+        p.add("CallHeader", brief.get("goal", ""), _subtitle(call), status, call.get("outcome"),
               brief.get("language", ""), _iso(call["created_at"]), _duration_s(call),
               int(brief.get("max_call_seconds", 240))),
     ]
     events = call.get("events", [])
-    if call["status"] == "waiting_user":
+    if status == "waiting_user":
         q = next((e for e in reversed(events) if e["type"] == "question"), None)
         if q:
             children.append(p.add("PendingQuestion", q["text"], q.get("options") or []))
@@ -156,7 +170,8 @@ def call_screen(call: dict) -> tuple[str, bool]:
 
 @router.get("/calls", dependencies=[Depends(require_token)])
 async def calls_view(limit: int = 50) -> dict:
-    ui, live = calls_screen(await history.list_calls(min(max(limit, 1), 200)))
+    calls = await history.list_calls(min(max(limit, 1), 200))
+    ui, live = calls_screen(calls, await history.stats(history.recent_cutoff()))
     return {"ui": ui, "live": live}
 
 
@@ -185,13 +200,13 @@ def mount_app(app: FastAPI) -> None:
 # --- sample screens for the web tests -------------------------------------------
 
 def _samples() -> dict[str, str]:
-    t0 = datetime(2026, 10, 24, 18, 0, tzinfo=timezone.utc)
+    t0 = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=3)  # recent, so not "lost"
     brief = {"call_id": "abc123", "user_id": "+4917600005678", "to_number": "+4915100001234", "language": "de",
              "caller_name": "Sina", "goal": "Book a table for 4, tomorrow, 20:00, inside",
              "user_facts": {}, "allowed_decisions": ["time within 30 min of 20:00"],
              "must_ask_user_for": ["any deposit or fee"], "max_call_seconds": 240}
     ev = lambda type, text, s, options=None: {"type": type, "text": text, "options": options,  # noqa: E731
-                                              "created_at": t0.replace(second=s)}
+                                              "created_at": t0 + timedelta(seconds=s)}
     waiting = {"call_id": "abc123", "brief": brief, "status": "waiting_user", "outcome": None, "summary": None,
                "details": None, "transcript": None, "created_at": t0, "ended_at": None,
                "events": [ev("placed", "Call placed", 0), ev("started", "Ringing the restaurant", 1),
@@ -200,11 +215,15 @@ def _samples() -> dict[str, str]:
             "summary": "Table for 4 booked at 21:00", "details": {"time": "21:00", "persons": "4"},
             "transcript": [{"speaker": "business", "text": "Ristorante, guten Tag?"},
                            {"speaker": "agent", "text": "Hallo, ich rufe für Sina an."}],
-            "ended_at": t0.replace(minute=2),
+            "ended_at": t0 + timedelta(minutes=2),
             "events": waiting["events"] + [ev("answer", "Yes", 9), ev("result", "Table for 4 booked at 21:00", 20)]}
+    lost = {**waiting, "call_id": "ghi789", "status": "active", "created_at": t0 - timedelta(hours=1),
+            "updated_at": t0 - timedelta(minutes=58)}
+    stats = {"live": 1, "recent": 3, "succeeded": 1, "failed": 1}
     return {
-        "calls.oui": calls_screen([waiting, done])[0],
-        "calls_empty.oui": calls_screen([])[0],
+        "calls.oui": calls_screen([waiting, done, lost], stats)[0],
+        "calls_empty.oui": calls_screen([], {"live": 0, "recent": 0, "succeeded": 0, "failed": 0})[0],
+        "call_lost.oui": call_screen({**lost, "events": waiting["events"][:2]})[0],
         "call_waiting.oui": call_screen(waiting)[0],
         "call_done.oui": call_screen(done)[0],
     }
