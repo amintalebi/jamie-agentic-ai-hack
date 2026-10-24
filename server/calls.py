@@ -17,7 +17,7 @@ from livekit import api as lk_api
 
 from common.contracts import CallBrief, CallEvent
 from common.masking import mask_phone, mask_text
-from common.safe_mode import refusal_reason, safe_mode
+from common.safe_mode import NotDialable, number_to_dial, safe_mode
 from server import gateway, history, memory, orchestrator, settings
 
 log = logging.getLogger("server.calls")
@@ -117,13 +117,18 @@ dispatcher: CallDispatcher = LiveKitDispatcher() if settings.CALLS_MODE == "live
 
 async def place_call(brief: CallBrief) -> str:
     """Dial brief.to_number. Pass call_id="" to get a fresh id. Returns the call_id.
-    Raises CallRefused for numbers we may not dial (see common/safe_mode.py)."""
-    reason = refusal_reason(brief.to_number)
-    if reason:
-        log.warning("refused call to %s: %s", mask_phone(brief.to_number), reason)
-        raise CallRefused(reason)
-    if not safe_mode():
-        log.warning("SAFE_MODE off: dialling a real number %s", mask_phone(brief.to_number))
+    Safe mode redirects the call to an allowed stand-in number (see common/safe_mode.py).
+    Raises CallRefused for numbers we may not dial."""
+    try:
+        dial = number_to_dial(brief.to_number)
+    except NotDialable as e:
+        log.warning("refused call to %s: %s", mask_phone(brief.to_number), e)
+        raise CallRefused(str(e)) from e
+    if dial != brief.to_number:
+        log.info("SAFE_MODE: call for %s goes to stand-in %s", mask_phone(brief.to_number), mask_phone(dial))
+        brief = brief.model_copy(update={"to_number": dial})
+    elif not safe_mode():
+        log.warning("SAFE_MODE off: dialling the real number %s", mask_phone(dial))
     if not brief.call_id:
         brief = brief.model_copy(update={"call_id": uuid.uuid4().hex[:12]})
     _calls[brief.call_id] = CallState(brief=brief)

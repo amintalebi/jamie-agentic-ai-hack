@@ -15,7 +15,7 @@ Env, all read after load_dotenv:
   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_SIP_OUTBOUND_TRUNK_ID
   RESON8_API_KEY, ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID_DE
   ALLOWED_CALL_NUMBERS       comma-separated E.164; with SAFE_MODE on, anything else is refused before dialing
-  SAFE_MODE                  default true; false = any valid E.164 number (real restaurants), AI disclosure forced on
+  SAFE_MODE                  default true (server already redirected to an allowed number); false = real restaurant numbers, AI disclosure forced on
   SERVER_PUBLIC_URL          where CallEvents go; default http://127.0.0.1:8001 (scripts/fake_server.py)
   CALL_LLM_MODEL             see config.py
   ELEVENLABS_TTS_MODEL       default eleven_v4_turbo

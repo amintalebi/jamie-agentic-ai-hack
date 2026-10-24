@@ -226,7 +226,7 @@ Tools:
 - `ask_user(question: str, options: list[str])`: sends a Linq poll (fallback: numbered text options). Ends the turn; the vote arrives later as a new event.
 - `send_message(text: str)`.
 - `remember(key: str, value: str)`: upsert a user fact.
-- `place_call(brief: CallBrief fields minus call_id)`: with `SAFE_MODE` on, refuses numbers not in `ALLOWED_CALL_NUMBERS`; otherwise dispatches the call and returns the call_id.
+- `place_call(brief: CallBrief fields minus call_id)`: with `SAFE_MODE` on, redirects numbers not in `ALLOWED_CALL_NUMBERS` to a stand-in from that list; otherwise dispatches the call and returns the call_id.
 - `find_business(query: str)`: for the demo, look up in a small `businesses` table seeded with the teammate "restaurant" numbers. Real search is out of scope.
 
 ### Mid-call questions
@@ -264,6 +264,6 @@ Fallbacks if behind: drop Mem0; drop voice notes (text only); drop mid-call poll
 - Keep it boring: FastAPI, Pydantic, httpx, sqlite3, the official SDKs. No new frameworks. Exception, agreed for the demo: the PWA (`web/`) uses Tailwind v4 and shadcn/ui on top of React and OpenUI; keep new UI on those rather than adding more.
 - Every external call gets a timeout and a log line. No silent failures: on errors, text the user something sensible.
 - Never log full API keys or full phone numbers (mask all but the last 4 digits).
-- Dialling goes through `common/safe_mode.py`. `SAFE_MODE` (default on, set it on both the server and the call agent) only allows `ALLOWED_CALL_NUMBERS`. With it off, any valid E.164 number may be called (real restaurants from `search_restaurants`, confirmed by the user first) and the call agent always discloses that it is an AI assistant.
+- Dialling goes through `common/safe_mode.py`. `SAFE_MODE` only changes where a call goes (search works the same): on (default, set it on both the server and the call agent), `place_call` redirects any number outside `ALLOWED_CALL_NUMBERS` to a stand-in from that list (`SAFE_MODE_NUMBER`, else the first one). Off, the real restaurant number is dialled (any valid E.164, confirmed by the user first) and the call agent always discloses that it is an AI assistant.
 - No em dashes in any text the agent sends to users.
 - Small commits, one component per person; do not edit another owner's folder without asking.
