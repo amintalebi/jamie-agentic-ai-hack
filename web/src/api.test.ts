@@ -1,17 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { stripToken, tokenFromHash } from "./api";
+import { normalisePhone } from "./api";
 
-describe("token links", () => {
+describe("normalisePhone", () => {
   it.each([
-    ["#token=T", "T", "#/"],
-    ["#/?token=T", "T", "#/"],
-    ["#/calls/abc?token=T", "T", "#/calls/abc"],
-    ["#/calls/abc?token=T&x=1", "T", "#/calls/abc?x=1"],
-    ["#/calls/abc?x=1&token=T", "T", "#/calls/abc?x=1"],
-    ["#/calls/abc", null, "#/calls/abc"],
-    ["", null, "#/"],
-  ])("%s", (hash, token, rest) => {
-    expect(tokenFromHash(hash)).toBe(token);
-    expect(stripToken(hash)).toBe(rest);
+    ["+49 151 0000 1234", "+4915100001234"],
+    ["+49-151-0000-1234", "+4915100001234"],
+    ["(555) 123-4567", "+5551234567"],
+    ["  015100001234", "+015100001234"],
+    ["  ", ""],
+  ])("%s -> %s", (raw, expected) => {
+    expect(normalisePhone(raw)).toBe(expected);
   });
 });

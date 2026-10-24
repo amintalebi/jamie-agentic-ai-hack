@@ -1,59 +1,47 @@
-const TOKEN_KEY = "jamie.dashboardToken";
+const USER_KEY = "jamie.userPhone";
 
-export function getToken(): string {
+export function getPhone(): string {
   try {
-    return localStorage.getItem(TOKEN_KEY) ?? "";
+    return localStorage.getItem(USER_KEY) ?? "";
   } catch {
     return "";
   }
 }
 
-export function setToken(token: string): void {
+export function setPhone(phone: string): void {
   try {
-    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, phone);
   } catch {
-    // private mode: token lasts for this page only
+    // private mode: phone lasts for this page only
   }
-  memoryToken = token;
+  memoryPhone = phone;
 }
 
-let memoryToken = "";
-
-/** 401: the token is missing or wrong. */
-export class AuthError extends Error {}
-/** 503: the server has no DASHBOARD_TOKEN set, so no token can work. */
-export class ConfigError extends Error {}
-
-/** Token carried in a link: "#token=T" or "#/calls/id?token=T&x=1". */
-export function tokenFromHash(hash: string): string | null {
-  return new URLSearchParams(splitHash(hash)[1]).get("token");
+export function clearPhone(): void {
+  try {
+    localStorage.removeItem(USER_KEY);
+  } catch {
+    // ignore
+  }
+  memoryPhone = "";
 }
 
-/** The hash without its token param: "#/calls/id?token=T&x=1" -> "#/calls/id?x=1", "#token=T" -> "#/". */
-export function stripToken(hash: string): string {
-  const [route, query] = splitHash(hash);
-  const params = new URLSearchParams(query);
-  params.delete("token");
-  const rest = params.toString();
-  return (route.length > 1 ? route : "#/") + (rest ? `?${rest}` : "");
-}
+let memoryPhone = "";
 
-function splitHash(hash: string): [string, string] {
-  if (hash.startsWith("#token=")) return ["#/", hash.slice(1)];
-  const i = hash.indexOf("?");
-  return i < 0 ? [hash, ""] : [hash.slice(0, i), hash.slice(i + 1)];
+/** Normalise a phone string loosely (keep digits and a leading +). */
+export function normalisePhone(raw: string): string {
+  const s = raw.trim().replace(/[\s\-().]/g, "");
+  if (!s) return "";
+  if (s.startsWith("+")) return "+" + s.slice(1).replace(/\D/g, "");
+  return "+" + s.replace(/\D/g, "");
 }
 
 export type Screen = { ui: string; live: boolean };
 
-export async function fetchScreen(path: string, signal?: AbortSignal): Promise<Screen> {
-  const token = getToken() || memoryToken;
-  const res = await fetch(`/api/dashboard${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    signal,
-  });
-  if (res.status === 401) throw new AuthError(await res.text());
-  if (res.status === 503) throw new ConfigError(await res.text());
+export async function fetchScreen(path: string, phone: string, signal?: AbortSignal): Promise<Screen> {
+  const user = normalisePhone(phone || getPhone() || memoryPhone);
+  const sep = path.includes("?") ? "&" : "?";
+  const res = await fetch(`/api/dashboard${path}${sep}user=${encodeURIComponent(user)}`, { signal });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
