@@ -1,25 +1,12 @@
 """HTTP client that posts CallEvents to the server and long-polls for the user's answer."""
 import logging
-import re
 
 import httpx
 
 from contracts_local import CallEvent  # TODO(hack): switch to server.contracts
+from common.masking import mask_phone, mask_text  # noqa: F401  (contracts_local puts the repo root on sys.path)
 
 log = logging.getLogger("call_agent.events")
-
-_PHONE_RE = re.compile(r"\+?\d[\d\s\-/()]{6,}\d")
-
-
-def mask_phone(number: str) -> str:
-    """Keep only the last 4 digits: '+4915112345678' -> '***5678'."""
-    digits = re.sub(r"\D", "", number)
-    return "***" + digits[-4:] if len(digits) > 4 else "***"
-
-
-def mask_text(text: str) -> str:
-    """Mask anything that looks like a phone number inside free text."""
-    return _PHONE_RE.sub(lambda m: mask_phone(m.group(0)), text)
 
 
 class EventsClient:

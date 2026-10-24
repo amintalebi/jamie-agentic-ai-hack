@@ -1,5 +1,11 @@
 """Server settings from the environment. Each adapter picks real or fake by its *_MODE variable."""
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Real env vars (e.g. from docker compose) win over .env.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 def env(name: str, default: str = "") -> str:

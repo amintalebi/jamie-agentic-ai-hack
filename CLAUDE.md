@@ -106,8 +106,8 @@ Owners agreed on these signatures (see `docs/team-split.md`); stub them until th
 | --- | --- |
 | `call_agent/agent.py` -> prompts/tools | `prompts.build_instructions(brief: CallBrief) -> str`, `tools.make_tools(brief, ...) -> list` |
 | gateway -> orchestrator | `async orchestrator.handle_message(user_id: str, text: str) -> None` |
-| gateway -> calls | `calls.pending_question(user_id) -> call_id or None`, `calls.resolve_answer(call_id, answer: str) -> None` |
-| orchestrator, calls -> gateway | `async gateway.send_text(to, text)`, `async gateway.send_poll(to, question, options)` |
+| gateway -> calls | `calls.match_vote(user_id, option, poll_id) -> call_id or None`, `calls.resolve_answer(call_id, answer: str) -> None` |
+| orchestrator, calls -> gateway | `async gateway.send_text(to, text)`, `async gateway.send_poll(to, question, options) -> poll_id or None` (votes carry it back as `InboundMessage.poll_id`) |
 | orchestrator -> calls | `async calls.place_call(brief: CallBrief) -> call_id` |
 | calls -> orchestrator | `async orchestrator.handle_call_result(event: CallEvent) -> None` |
 | orchestrator -> calls | `calls.get_brief(call_id) -> CallBrief or None`, `calls.active_calls(user_id) -> list[CallBrief]`, `calls.CallRefused` |

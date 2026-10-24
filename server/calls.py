@@ -10,10 +10,10 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from common.contracts import CallBrief, CallEvent
-from common.masking import mask_phone
+from common.masking import mask_phone, mask_text
 from server import gateway, orchestrator, settings
 
 log = logging.getLogger("server.calls")
@@ -26,16 +26,28 @@ class CallRefused(Exception):
     """The number is not in ALLOWED_CALL_NUMBERS, or the call could not be dispatched."""
 
 
+class UnknownCall(Exception):
+    pass
+
+
 @dataclass
 class CallState:
     brief: CallBrief
     status: Literal["dialing", "active", "ended"] = "dialing"
-    question: CallEvent | None = None            # pending question, None once answered
-    answer: str | None = None
+    question: CallEvent | None = None            # pending question, None once answered or given up
+    poll_id: str | None = None                   # id of the poll sent for `question`
+    answer: str | None = None                    # None + answer_ready set = "no answer coming"
     answer_ready: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 _calls: dict[str, CallState] = {}
+_background: set[asyncio.Task] = set()  # strong refs so running tasks are not garbage-collected
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
 
 
 # --- dispatchers ---------------------------------------------------------------
@@ -57,7 +69,7 @@ class FakeDispatcher:
     """Plays a scripted call over HTTP against this server, like the real call agent would."""
 
     async def dispatch(self, brief: CallBrief) -> None:
-        asyncio.create_task(self._run(brief))
+        _spawn(self._run(brief))
 
     async def _run(self, brief: CallBrief) -> None:
         base = f"{settings.LOCAL_SERVER_URL}/calls/{brief.call_id}"
@@ -126,6 +138,19 @@ def pending_question(user_id: str) -> str | None:
     return None
 
 
+def match_vote(user_id: str, option: str, poll_id: str | None) -> str | None:
+    """call_id whose pending question this vote answers, or None (then it is an orchestrator poll vote).
+    Matches on poll_id when the messenger gives one; otherwise the option must be one of the question's."""
+    call_id = pending_question(user_id)
+    if call_id is None:
+        return None
+    state = _calls[call_id]
+    if poll_id is not None and state.poll_id is not None:
+        return call_id if poll_id == state.poll_id else None
+    options = [o.lower() for o in (state.question.options or [])]
+    return call_id if option.strip().lower() in options else None
+
+
 async def resolve_answer(call_id: str, answer: str) -> None:
     """Store the user's vote so the call agent's /answer long-poll returns it."""
     state = _calls.get(call_id)
@@ -136,43 +161,75 @@ async def resolve_answer(call_id: str, answer: str) -> None:
     state.question = None
     state.answer = answer
     state.answer_ready.set()
-    log.info("answer for call %s: %r", call_id, answer)
+    log.info("answer for call %s: %r", call_id, mask_text(answer))
 
 
-async def handle_event(event: CallEvent) -> None:
+def apply_event(event: CallEvent) -> None:
+    """Update call state for an event. Fast and side-effect free, so the HTTP reply is immediate."""
     state = _calls.get(event.call_id)
     if state is None:
-        raise KeyError(event.call_id)
-    log.info("call %s event %s: %r", event.call_id, event.type, event.text[:120])
-    user = state.brief.user_id
-
+        raise UnknownCall(event.call_id)
+    log.info("call %s event %s: %r", event.call_id, event.type, mask_text(event.text)[:120])
     if event.type == "started":
         state.status = "active"
     elif event.type == "question":
         state.question = event
+        state.poll_id = None
         state.answer = None
         state.answer_ready.clear()
-        await gateway.send_poll(user, f"On the call: {event.text}", event.options or ["Yes", "No"])
     elif event.type in ("result", "failed"):
         state.status = "ended"
         state.question = None
+
+
+async def after_event(event: CallEvent) -> None:
+    """Slow side effects of an event (polls, LLM summary). Runs after the HTTP reply."""
+    state = _calls[event.call_id]
+    user = state.brief.user_id
+    if event.type == "question":
+        try:
+            poll_id = await gateway.send_poll(user, f"On the call: {event.text}", event.options or ["Yes", "No"])
+            if state.question is event:  # a newer question may have replaced this one meanwhile
+                state.poll_id = poll_id
+        except Exception:
+            log.exception("poll for call %s failed, giving up on the question", event.call_id)
+            if state.question is event:
+                state.question = None
+                state.answer = None
+                state.answer_ready.set()  # /answer returns null now, the agent says we will call back
+            try:
+                await gateway.send_text(user, f"On the call they asked: {event.text} "
+                                              "I could not send you the poll, so I'll say you will call back.")
+            except Exception:
+                log.exception("fallback text for call %s failed too", event.call_id)
+    elif event.type in ("result", "failed"):
         try:
             await orchestrator.handle_call_result(event)
         except Exception:
             log.exception("handle_call_result failed for call %s", event.call_id)
-            await gateway.send_text(user, "The call ended, but I could not write the summary. Sorry!")
+            try:
+                await gateway.send_text(user, "The call ended, but I could not write the summary. Sorry!")
+            except Exception:
+                log.exception("fallback text for call %s failed too", event.call_id)
+
+
+async def handle_event(event: CallEvent) -> None:
+    """apply_event + after_event, inline. For tests and in-process callers."""
+    apply_event(event)
+    await after_event(event)
 
 
 # --- HTTP routes used by the call agent ---------------------------------------
 
 @router.post("/calls/{call_id}/events")
-async def post_event(call_id: str, event: CallEvent) -> dict:
+async def post_event(call_id: str, event: CallEvent, background: BackgroundTasks) -> dict:
     if event.call_id != call_id:
         raise HTTPException(400, "call_id in path and body differ")
     try:
-        await handle_event(event)
-    except KeyError:
+        apply_event(event)
+    except UnknownCall:
         raise HTTPException(404, "unknown call")
+    background.add_task(after_event, event)
     return {"ok": True}
 
 
