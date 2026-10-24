@@ -10,3 +10,4 @@ langchain-anthropic>=0.3.0
 langgraph>=0.2.0
 
 tzdata==2026.5    # zoneinfo data for Europe/Berlin (slim images ship without it)
+livekit-api==1.2.2
