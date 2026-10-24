@@ -1,0 +1,29 @@
+services:
+  db:
+    build: ./db
+    environment:
+      POSTGRES_USER: jamie
+      POSTGRES_PASSWORD: jamie
+      POSTGRES_DB: jamie
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jamie -d jamie"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  server:
+    build: ./server
+    environment:
+      DATABASE_URL: postgresql://jamie:jamie@db:5432/jamie
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

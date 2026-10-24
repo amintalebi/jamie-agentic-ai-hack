@@ -1,6 +1,25 @@
-# CLAUDE.md: Call-for-me iMessage agent
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+# Call-for-me iMessage agent ("Jamie")
 
 Hackathon project (Agentic AI Hack, Berlin, Sat 24 Oct 2026). Hard deadline: competition opt-in at 19:00, live demo at 20:00. Optimise for a demo that works reliably, not for completeness. When in doubt, pick the simplest thing that works and leave a `TODO(hack)` comment.
+
+## Commands
+
+```
+docker compose up --build              # Postgres (pgvector) on :5432 + server on :8000
+curl localhost:8000/health             # checks the DB connection and reports the pgvector version
+docker compose down -v                 # stop and wipe the DB volume (re-runs db/init/*.sql next start)
+```
+
+Run the server without Docker (needs a Postgres with pgvector reachable at `DATABASE_URL`):
+```
+cd server && pip install -r requirements.txt && DATABASE_URL=postgresql://jamie:jamie@localhost:5432/jamie uvicorn main:app --reload
+```
+
+There are no tests or lint config yet.
 
 ## What we are building
 
@@ -51,6 +70,7 @@ Two processes only: `server` and `call_agent`. Both Python 3.11+.
 /call_agent
   agent.py           LiveKit worker entrypoint
   prompts.py         call-agent system prompt built from CallBrief
+  tools.py           ask_user / end_call tools for the call LLM
   events.py          HTTP client posting CallEvents back to server
 /scripts
   dial_test.py       dial a number with a hello-world agent (telephony smoke test)
@@ -59,7 +79,23 @@ contracts.md         human-readable copy of the contracts
 .env.example
 ```
 
-Import `contracts.py` from both processes (shared via a small `common/` package or path hack; whichever is fastest).
+`contracts.py` lives in `server/`. Import it from both processes (shared via a small `common/` package or path hack; whichever is fastest).
+
+## Interfaces between modules
+
+Owners agreed on these signatures (see `docs/team-split.md`); stub them until the real code lands rather than inventing new ones.
+
+| Caller -> callee | Interface |
+| --- | --- |
+| `call_agent/agent.py` -> prompts/tools | `prompts.build_instructions(brief: CallBrief) -> str`, `tools.make_tools(brief, ...) -> list` |
+| gateway -> orchestrator | `async orchestrator.handle_message(user_id: str, text: str) -> None` |
+| gateway -> calls | `calls.pending_question(user_id) -> call_id or None`, `calls.resolve_answer(call_id, answer: str) -> None` |
+| orchestrator, calls -> gateway | `async gateway.send_text(to, text)`, `async gateway.send_poll(to, question, options)` |
+| orchestrator -> calls | `async calls.place_call(brief: CallBrief) -> call_id` |
+| calls -> orchestrator | `async orchestrator.handle_call_result(event: CallEvent) -> None` |
+| `call_agent/events.py` -> server (HTTP) | `POST /calls/{id}/events` with a `CallEvent`; `GET /calls/{id}/answer?wait=40` |
+
+File ownership per person is in `docs/team-split.md`; check it before editing a file you do not own.
 
 ## Stack and models
 

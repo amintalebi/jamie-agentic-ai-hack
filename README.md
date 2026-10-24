@@ -52,7 +52,14 @@ They share `CallBrief` and `CallEvent` from `contracts.py`. See [CLAUDE.md](CLAU
 
 ## Setup
 
-Code is still being written. These steps will be filled in as components land.
+Run the server and Postgres (with pgvector) locally:
+
+```
+docker compose up --build
+curl localhost:8000/health
+```
+
+Full setup, as components land:
 
 1. Copy `.env.example` to `.env` and fill in the keys.
 2. Set `ALLOWED_CALL_NUMBERS` to the numbers you are allowed to dial. The agent refuses every other number.
