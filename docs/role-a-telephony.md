@@ -119,3 +119,16 @@ Fixed after it: the agent opened on the first pause, over the rest of the greeti
 sentence. It now waits for the STT to commit the greeting (fallbacks: 3 s of silence, 7 s without a committed
 turn), and `call_agent/style.py` adds a phone-style layer on top of E's prompt: one short sentence per reply,
 details when asked, no filler, optional tone tags.
+
+## Running the worker as a container
+
+```bash
+docker build -f call_agent/Dockerfile -t jamie-call-agent .     # from the repo root, so common/ is included
+docker run --rm --env-file .env jamie-call-agent                 # production mode, registers as CALL_AGENT_NAME
+```
+
+Built and smoke-tested on 24 Oct (587 MB, python 3.12-slim). Two rules for the `.env` it reads:
+no inline comments (Docker's `--env-file` and the Dokploy `env_file` keep `0.5   # comment` as the value,
+unlike python-dotenv), and run only one worker per agent name at a time, or LiveKit picks either one.
+Compose entry for the Dokploy stack: `build: {context: ., dockerfile: call_agent/Dockerfile}`, `env_file: .env`,
+`restart: unless-stopped`, no ports.
