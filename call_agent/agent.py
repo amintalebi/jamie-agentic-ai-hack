@@ -122,6 +122,12 @@ class CallLLM(anthropic.LLM):
     tool calls, so a thinking turn before ask_user/end_call would fail. Measured 24 Oct on this
     laptop (median TTFT, 4 runs): Haiku 4.5 1.47 s, Haiku 5.5 thinking off 1.22 s, both noisy."""
 
+    def __init__(self, **kwargs):
+        # Strict tool schemas (the plugin default) make the API reject E's end_call(details: dict[str, str]):
+        # "additionalProperties: object is not supported". Non-strict schemas accept it. Seen on the first dial test.
+        kwargs.setdefault("_strict_tool_schema", False)
+        super().__init__(**kwargs)
+
     def chat(self, *, extra_kwargs=NOT_GIVEN, **kwargs):
         extra = dict(extra_kwargs) if is_given(extra_kwargs) else {}
         if str(self.model).startswith("claude-haiku-5"):
