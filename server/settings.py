@@ -30,10 +30,11 @@ QDRANT_URL = env("QDRANT_URL")                   # empty = embedded local Qdrant
 QDRANT_API_KEY = env("QDRANT_API_KEY")
 QDRANT_PATH = env("QDRANT_PATH", "")             # optional local disk path when QDRANT_URL is empty
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
-ORCHESTRATOR_MODEL = env("ORCHESTRATOR_MODEL", "claude-sonnet-4-6")
+ORCHESTRATOR_MODEL = env("ORCHESTRATOR_MODEL", "claude-sonnet-5-5")
 # Seed identity for a user we have never seen, so the demo works on a fresh database.
 DEMO_USER_NAME = env("DEMO_USER_NAME", "Sina")
 DEMO_BUSINESS_NAME = env("DEMO_BUSINESS_NAME", "Trattoria da Demo")
+CALL_LANGUAGE = env("CALL_LANGUAGE", "en")       # en | de: language the call agent speaks by default
 CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
 LINQ_API_KEY = env("LINQ_API_KEY")
 LINQ_WEBHOOK_SECRET = env("LINQ_WEBHOOK_SECRET")     # whsec_...; empty = signatures not checked

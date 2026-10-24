@@ -27,6 +27,7 @@ log = logging.getLogger("server.orchestrator")
 MAX_TOOL_ITERATIONS = 6
 LLM_TIMEOUT_S = 25.0
 DEFAULT_USER_NAME = settings.DEMO_USER_NAME
+DEFAULT_CALL_LANGUAGE: Literal["de", "en"] = "de" if settings.CALL_LANGUAGE == "de" else "en"
 
 
 # Thinking cannot be switched off on these; they take a low effort setting instead.
@@ -52,14 +53,11 @@ def _make_llm(max_tokens: int, timeout: float) -> ChatAnthropic:
 
 
 async def _set_status(user_id: str, text: str, new: bool = False) -> None:
-    """Best effort live status bubble. Cosmetic, so it must never break a turn or a call.
-    gateway.set_status only exists once the iMessage extras from main are merged; without it
-    this is a no-op. The updates during a call belong to calls.py, see docs/issue-live-call-status.md."""
-    set_status = getattr(gateway, "set_status", None)
-    if set_status is None:
-        return
+    """Best effort live status bubble: opened here when a call is placed, closed in
+    handle_call_result. The updates in between come from calls.py, which also owns the edit
+    budget. Cosmetic, so a failure must never break the turn."""
     try:
-        await set_status(user_id, text, new)
+        await gateway.set_status(user_id, text, new)
     except Exception as e:
         log.warning("status update for %s failed: %s", mask_phone(user_id), e)
 
@@ -114,6 +112,8 @@ Style rules:
 - Never use em dashes or en dashes anywhere in messages or poll options.
 
 Core behavior:
+- Calls are placed in {DEFAULT_CALL_LANGUAGE} unless the user asks for another language or the business
+  clearly only speaks one. Do not pass a different `language` to `place_call` on your own.
 - Check the user's known profile facts first instead of asking again.
 - Save any new durable user preference, name, or favorite place using the `remember` tool.
 - When the user mentions a business (like "the usual Italian place" or a restaurant name), resolve its phone number using `find_business` and the user's facts (`usual_italian`, etc.).
@@ -167,8 +167,9 @@ class FindBusinessArgs(BaseModel):
 class PlaceCallArgs(BaseModel):
     to_number: str = Field(description="E.164 phone number of the business from find_business.")
     language: Literal["de", "en"] = Field(
-        default="de",
-        description="Call language ('de' for German businesses in Berlin, 'en' if English is requested).",
+        default=DEFAULT_CALL_LANGUAGE,
+        description="Call language. Default 'en'. Use 'de' only if the user asks for German "
+                    "or the business clearly only speaks German.",
     )
     caller_name: str = Field(description="Name of the user we are calling on behalf of, e.g. 'Sina'.")
     business_name: str = Field(
@@ -242,7 +243,7 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
         caller_name: str,
         goal: str,
         business_name: str = "",
-        language: Literal["de", "en"] = "de",
+        language: Literal["de", "en"] = DEFAULT_CALL_LANGUAGE,
         allowed_decisions: list[str] | None = None,
         must_ask_user_for: list[str] | None = None,
     ) -> str:
@@ -417,7 +418,7 @@ def _booking_brief(user_id: str, facts: dict[str, str], business: dict, seating:
         call_id="",
         user_id=user_id,
         to_number=business["phone"],
-        language="de",
+        language=DEFAULT_CALL_LANGUAGE,
         caller_name=facts.get("name", DEFAULT_USER_NAME),
         goal=f"Book a table for 4, {date_label}, 20:00, {seating}",
         user_facts={**facts, "seating_preference": seating, "callback_number": user_id},
@@ -504,15 +505,14 @@ def _fallback_call_summary(brief: CallBrief, event: CallEvent) -> str:
         date_val = details.get("date", "")
         name_val = details.get("name", brief.caller_name)
         parts = ["All set!"]
-        booking_bits = []
-        if persons_val:
-            booking_bits.append(f"table for {persons_val}")
+        # "a table for 4" only reads right with a party size; without one say "Booked for ...".
+        booking_bits = [f"a table for {persons_val}"] if persons_val else []
         if date_val:
             booking_bits.append(f"on {date_val}")
         if time_val:
             booking_bits.append(f"at {time_val}")
         if booking_bits:
-            parts.append(f"Booked a {' '.join(booking_bits)} under {name_val}.")
+            parts.append(f"Booked {' '.join(booking_bits)} under {name_val}.")
         else:
             parts.append(f"{event.text}.")
         if details.get("notes"):
