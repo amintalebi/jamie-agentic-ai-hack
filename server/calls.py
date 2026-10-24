@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from livekit import api as lk_api
 
 from common.contracts import CallBrief, CallEvent
@@ -300,3 +300,33 @@ async def get_answer(call_id: str, wait: int = 40) -> dict:
     state.answer_ready.clear()
     answer, state.answer = state.answer, None
     return {"answer": answer}
+
+
+MAX_RECORDING_BYTES = 50 * 1024 * 1024  # a 4 min two-track OGG is about 4 MB
+
+
+@router.post("/calls/{call_id}/recording")
+async def post_recording(call_id: str, request: Request) -> dict:
+    """The call agent uploads the session recording (audio/ogg, callee and agent tracks) at hangup."""
+    if call_id not in _calls and await history.get_call(call_id) is None:
+        raise HTTPException(404, "unknown call")
+    content_type = request.headers.get("content-type", "audio/ogg").split(";")[0].strip() or "audio/ogg"
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(400, "empty body")
+    if len(audio) > MAX_RECORDING_BYTES:
+        raise HTTPException(413, "recording too large")
+    await history.save_recording(call_id, content_type, audio)
+    log.info("recording for call %s stored: %d bytes %s", call_id, len(audio), content_type)
+    return {"ok": True, "bytes": len(audio), "url": f"/calls/{call_id}/recording"}
+
+
+@router.get("/calls/{call_id}/recording")
+async def get_recording(call_id: str) -> Response:
+    """Play or download the recording. Dashboard: link to this path from the call detail page."""
+    found = await history.get_recording(call_id)
+    if found is None:
+        raise HTTPException(404, "no recording for this call")
+    content_type, audio = found
+    return Response(content=audio, media_type=content_type,
+                    headers={"Content-Disposition": f'inline; filename="{call_id}.ogg"'})

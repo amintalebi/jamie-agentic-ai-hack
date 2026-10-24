@@ -24,6 +24,11 @@ Env, all read after load_dotenv:
   CALL_NOISE_CANCEL          1 = LiveKit Cloud telephony noise cancellation on the callee's audio; default 1
   CALL_ENDPOINT_MIN_S        silence before a callee turn closes; default 2.0 (0.5 chopped hesitant speakers)
   CALL_GOODBYE_WAIT_S        after our goodbye, wait this long for the business to say theirs before hanging up; default 3
+  CALL_AMBIENCE              office (default) | city | crowded | off: quiet room tone under the agent's voice
+  CALL_AMBIENCE_VOLUME       default 0.12 (LiveKit's example uses 0.8; keep it barely there)
+  CALL_RECORD                1 = record both sides (LiveKit RecorderIO, two-track OGG) and upload it to the server; default 1
+  CALL_RECORDINGS_DIR        optional local copy of each recording
+  CALL_EVENTS_SECRET         optional bearer token the server expects on /calls/* (PR #31)
   CALL_INTERRUPT_MIN_S, CALL_INTERRUPT_MIN_WORDS   speech needed to interrupt the agent; default 0.7 s and 2 words
   CALL_AUDIO_TAGS            1 = let the LLM prefix replies with an ElevenLabs tone tag such as [warm]; default 0
   ELEVENLABS_STABILITY       optional 0..1 voice stability (0.5 = natural); similarity fixed at 0.75
@@ -55,6 +60,9 @@ from livekit.agents import (  # noqa: E402
     AMD,
     NOT_GIVEN,
     Agent,
+    AudioConfig,
+    BackgroundAudioPlayer,
+    BuiltinAudioClip,
     AgentServer,
     AgentSession,
     ConversationItemAddedEvent,
@@ -210,6 +218,7 @@ class CallState:
     turn: int = 0                # assistant turns completed
     business_turns: int = 0      # callee turns committed by the STT
     opened: bool = False         # we forced the opening line
+    session_closed: asyncio.Event = field(default_factory=asyncio.Event)
     last_user_metrics: dict = field(default_factory=dict)
 
 
@@ -232,6 +241,8 @@ def wire_events(session: AgentSession, ctx: JobContext, brief: CallBrief, transc
         text = strip_tags(item.text_content or "")
         metrics = dict(item.metrics or {})
         if item.role == "user":
+            if text == OPENING_NUDGE:
+                return
             state.user_spoke = True
             state.business_turns += 1
             transcript.add("business", text)
@@ -264,6 +275,7 @@ def wire_events(session: AgentSession, ctx: JobContext, brief: CallBrief, transc
     @session.on("close")
     def _on_close(ev) -> None:
         log.info("session closed: %s", getattr(ev, "reason", ""))
+        state.session_closed.set()
 
     @session.on("error")
     def _on_error(ev) -> None:
@@ -304,7 +316,10 @@ async def graceful_shutdown(ctx: JobContext, reason: str) -> None:
     ctx.shutdown(reason)
 
 
-async def open_conversation(session: AgentSession, state: CallState, brief: CallBrief, silence_s: float, max_wait_s: float = 7.0) -> None:
+OPENING_NUDGE = "[The line is connected and nobody has spoken yet. Greet the business now and state the request.]"
+
+
+async def open_conversation(session: AgentSession, state: CallState, brief: CallBrief, silence_s: float, max_wait_s: float = 9.0) -> None:
     """Listen first, then make sure the agent speaks.
 
     Normal path: the callee greets, the STT commits that turn about a second after they stop, and the
@@ -327,10 +342,9 @@ async def open_conversation(session: AgentSession, state: CallState, brief: Call
         return
     state.opened = True
     log.info("opening (%s)", reason)
-    session.generate_reply(
-        instructions=f'Open now with exactly "{opening_line(brief)}" plus one short sentence with the core request. '
-                     "Under twenty words in total.",
-    )
+    # A synthetic user turn, not an instruction: with an instruction the model once replied
+    # "I'm ready to make the call." (17:38 test call). The nudge is filtered out of the transcript.
+    session.generate_reply(user_input=OPENING_NUDGE)
 
 
 async def hard_stop(ctx: JobContext, session: AgentSession, events: EventsClient, brief: CallBrief,
@@ -352,6 +366,65 @@ async def hard_stop(ctx: JobContext, session: AgentSession, events: EventsClient
     log.error("hard stop at max_call_seconds=%d", brief.max_call_seconds)
     await post_final(events, brief, transcript, "partial", f"Hard stop after {brief.max_call_seconds} s")
     await graceful_shutdown(ctx, "max_call_seconds")
+
+
+_AMBIENCE = {
+    "office": BuiltinAudioClip.OFFICE_AMBIENCE,
+    "city": BuiltinAudioClip.CITY_AMBIENCE,
+    "crowded": BuiltinAudioClip.CROWDED_ROOM,
+}
+
+
+async def start_ambience(ctx: JobContext, session: AgentSession) -> BackgroundAudioPlayer | None:
+    """A little room tone on its own audio track, so the line never sounds dead. Off with CALL_AMBIENCE=off."""
+    clip = _AMBIENCE.get(os.getenv("CALL_AMBIENCE", "office").lower())
+    if clip is None:
+        return None
+    volume = float(os.getenv("CALL_AMBIENCE_VOLUME", "0.12"))
+    player = BackgroundAudioPlayer(ambient_sound=AudioConfig(clip, volume=volume))
+    await player.start(room=ctx.room, agent_session=session)
+    log.info("ambience %s at volume %.2f", clip.name.lower(), volume)
+    return player
+
+
+async def upload_recording(ctx: JobContext, state: CallState, brief: CallBrief, server_url: str) -> None:
+    """Shutdown callback: ship the two-track OGG LiveKit wrote for this session to the server.
+
+    RecorderIO writes {session_directory}/audio.ogg (track 1 the callee, track 2 the agent) and closes it
+    when the session closes, so we wait for the close event first. The server stores it under
+    POST /calls/{call_id}/recording and serves it back from the same path."""
+    try:
+        await asyncio.wait_for(state.session_closed.wait(), timeout=8)
+    except asyncio.TimeoutError:
+        log.warning("session did not report closed within 8 s, uploading whatever audio exists")
+    path = ctx.session_directory / "audio.ogg"
+    for _ in range(10):  # the encoder thread may still be flushing
+        if path.exists() and path.stat().st_size > 0:
+            break
+        await asyncio.sleep(0.3)
+    if not path.exists() or path.stat().st_size == 0:
+        log.warning("no recording file at %s", path)
+        return
+    data = path.read_bytes()
+    if copy_dir := os.getenv("CALL_RECORDINGS_DIR"):
+        dest = Path(copy_dir) / f"{brief.call_id}.ogg"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        log.info("recording copied to %s", dest)
+    headers = {"Content-Type": "audio/ogg"}
+    if secret := os.getenv("CALL_EVENTS_SECRET"):
+        headers["Authorization"] = f"Bearer {secret}"
+    url = f"{server_url.rstrip('/')}/calls/{brief.call_id}/recording"
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(url, content=data, headers=headers)
+        if r.status_code >= 400:
+            log.error("recording upload failed: %s %s", r.status_code, r.text[:120])
+        else:
+            log.info("recording uploaded: %d bytes -> %s", len(data), url)
+    except Exception as e:  # noqa: BLE001
+        log.error("recording upload error: %s", e)
 
 
 def build_tools(brief: CallBrief, events: EventsClient, transcript: Transcript, state: CallState) -> list:
@@ -431,7 +504,17 @@ async def call_session(ctx: JobContext) -> None:
     audio_in = room_io.AudioInputOptions(noise_cancellation=noise_cancellation.BVCTelephony()) if noise_cancellation and env_flag("CALL_NOISE_CANCEL", True) else room_io.AudioInputOptions()
     room_opts = (room_io.RoomOptions(participant_identity=sip_identity, close_on_disconnect=True, audio_input=audio_in)
                  if mode != "console" else room_io.RoomOptions())
-    await session.start(agent=agent, room=ctx.room, room_options=room_opts)
+    await session.start(agent=agent, room=ctx.room, room_options=room_opts, record=env_flag("CALL_RECORD", True))
+    ambience = await start_ambience(ctx, session)
+    if ambience is not None:
+        async def _close_ambience(reason: str = "") -> None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(ambience.aclose(), timeout=3)  # hung after the room was gone (17:38 test call)
+        ctx.add_shutdown_callback(_close_ambience)
+    if env_flag("CALL_RECORD", True):
+        async def _upload(reason: str = "") -> None:
+            await upload_recording(ctx, state, brief, server_url)
+        ctx.add_shutdown_callback(_upload)
 
     if mode == "console":
         state.answered_at = time.monotonic()

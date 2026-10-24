@@ -78,6 +78,10 @@ The worker log shows the dial, "answered after N s", each turn with its latency 
 | `CALL_ENDPOINT_MIN_S` | 2.0 | Silence before the callee's turn closes. 0.5 chopped hesitant speakers into fragments on the first server-driven call; 2.0 costs about 1.5 s per reply, lower it to 1.2 if that feels slow |
 | `CALL_INTERRUPT_MIN_S`, `CALL_INTERRUPT_MIN_WORDS` | 0.7, 2 | Speech needed to interrupt the agent; a single "G-" used to cut it off |
 | `CALL_GOODBYE_WAIT_S` | 3 | After the agent's goodbye, wait for the business to speak and pause before hanging up |
+| `CALL_AMBIENCE`, `CALL_AMBIENCE_VOLUME` | office, 0.12 | Quiet room tone on a separate track so the line never sounds dead. `off` disables |
+| `CALL_RECORD` | 1 | Record both sides. LiveKit writes a stereo Opus OGG (callee on one channel, agent on the other); at hangup the worker uploads it to `POST /calls/{id}/recording`, the server stores it in Postgres and serves it at `GET /calls/{id}/recording` |
+| `CALL_RECORDINGS_DIR` | unset | Also keep a local copy of each recording |
+| `CALL_EVENTS_SECRET` | unset | Bearer token sent with the recording upload (and by E's events client after PR #31) |
 
 ## Measured 24 Oct, 13:50 to 14:00, on the hackathon wifi
 

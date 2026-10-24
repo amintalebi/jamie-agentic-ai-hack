@@ -36,7 +36,8 @@ def style_addendum(brief: CallBrief) -> str:
 - Deine erste Antwort: die Begrüßung plus ein kurzer Satz mit dem Kern des Anliegens (zum Beispiel ein Tisch für vier am Sonntagabend). Details wie Uhrzeit, Platz oder Name kommen, wenn danach gefragt wird.
 - Ein Satz pro Antwort, höchstens zwei, jeder unter fünfzehn Wörtern. Einzige Ausnahme: die eine Zusammenfassung am Ende.
 - Kurze Bestätigungen sind gut: "Gerne.", "Alles klar.", "Danke."
-- Wiederhole dich nicht. Keine Floskeln wie "Vielen Dank für die Nachfrage"."""
+- Wiederhole dich nicht. Keine Floskeln wie "Vielen Dank für die Nachfrage".
+- Klinge wie ein Mensch, der nachdenkt: ab und zu, wenn du etwas abwägst oder prüfst, beginne mit einem kurzen natürlichen Zögern wie "Hmm,", "Ähm," oder "Moment,". Höchstens jede dritte Antwort. Nie in der Begrüßung, der Zusammenfassung, dem Abschied oder in ask_user und end_call."""
     else:
         base = f"""
 
@@ -45,7 +46,8 @@ def style_addendum(brief: CallBrief) -> str:
 - Your first reply: the greeting plus one short sentence with the core request (for example a table for four on Sunday evening). Details like the exact time, seating or the name come when they ask.
 - One sentence per reply, two at most, each under fifteen words. The single summary at the end is the only exception.
 - Short acknowledgements are good: "Sure.", "Got it.", "Thanks."
-- Do not repeat yourself. No filler like "I appreciate you checking"."""
+- Do not repeat yourself. No filler like "I appreciate you checking".
+- Sound like a person thinking: now and then, when you are weighing or checking something, start with a short natural hesitation such as "Hmm,", "Umm," or "Let me see,". At most one reply in three. Never in the opening line, the summary, the goodbye, or inside ask_user and end_call."""
     if not audio_tags_enabled():
         return base
     tags = " ".join(TAGS)
