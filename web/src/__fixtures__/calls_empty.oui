@@ -1,0 +1,7 @@
+root = Page("Calls", "Live call monitor", [n4, n5])
+n0 = Stat("Live now", "0", "neutral")
+n1 = Stat("Last 24 h", "0", "neutral")
+n2 = Stat("Succeeded", "0", "good")
+n3 = Stat("Failed", "0", "bad")
+n4 = StatRow([n0, n1, n2, n3])
+n5 = Empty("No calls yet. Ask Jamie to call somewhere and it shows up here live.")
