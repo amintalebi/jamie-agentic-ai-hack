@@ -30,6 +30,9 @@ Env, all read after load_dotenv:
   CALL_RECORDINGS_DIR        optional local copy of each recording
   CALL_EVENTS_SECRET         optional bearer token the server expects on /calls/* (PR #31)
   CALL_INTERRUPT_MIN_S, CALL_INTERRUPT_MIN_WORDS   speech needed to interrupt the agent; default 0.7 s and 2 words
+  CALL_TURN_DETECTOR         1 = LiveKit's multilingual end-of-turn model decides when the callee is done
+                             (default off). Then CALL_TD_MIN_S (default 0.5) and CALL_TD_MAX_S (3.0) replace
+                             CALL_ENDPOINT_MIN_S/MAX_S. Model files are baked into the image at build time
   CALL_AUDIO_TAGS            1 = let the LLM prefix replies with an ElevenLabs tone tag such as [warm]; default 0
   ELEVENLABS_STABILITY       optional 0..1 voice stability (0.5 = natural); similarity fixed at 0.75
   CALL_STT                   elevenlabs (default: Scribe v2 realtime, VAD turn detection) or reson8 (STT turn detection)
@@ -82,6 +85,12 @@ try:  # LiveKit Cloud noise cancellation tuned for phone audio; optional
     from livekit.plugins import noise_cancellation  # noqa: E402
 except ImportError:  # pragma: no cover
     noise_cancellation = None
+
+# Semantic end-of-turn model (local ONNX, English + German), behind CALL_TURN_DETECTOR=1. Plugins must be
+# imported on the main thread at startup, so the import happens here; off = nothing is loaded.
+MultilingualModel = None
+if os.getenv("CALL_TURN_DETECTOR", "").strip().lower() in ("1", "true", "yes", "on"):
+    from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402,F811
 
 from config import call_llm_model  # noqa: E402
 from contracts_local import CallBrief, CallEvent  # noqa: E402  TODO(hack): switch to server.contracts
@@ -197,6 +206,17 @@ def build_session(brief: CallBrief) -> AgentSession:
         # closes about a second after the callee stops talking, independent of line noise.
         stt = elevenlabs.STT(api_key=os.environ["ELEVENLABS_API_KEY"], model="scribe_v2_realtime", language_code=brief.language)
         turn_detection = "vad"
+    # Fixed silence by default. With the turn detector, the model reads the transcript: "21 Uhr." ends the
+    # turn after CALL_TD_MIN_S, "Ähm, also..." waits up to CALL_TD_MAX_S. So the floor can drop to 0.5 s
+    # without chopping hesitant speakers the way a short fixed silence did on 24 Oct.
+    endpointing = {"min_delay": float(os.getenv("CALL_ENDPOINT_MIN_S", "2.0")),
+                   "max_delay": float(os.getenv("CALL_ENDPOINT_MAX_S", "3.0"))}
+    if MultilingualModel is not None:
+        turn_detection = MultilingualModel()
+        endpointing = {"min_delay": float(os.getenv("CALL_TD_MIN_S", "0.5")),
+                       "max_delay": float(os.getenv("CALL_TD_MAX_S", "3.0"))}
+        log.info("turn detector on: multilingual model, endpointing %.1f to %.1f s",
+                 endpointing["min_delay"], endpointing["max_delay"])
     return AgentSession(
         stt=stt,
         llm=CallLLM(model=call_llm_model(), max_tokens=200),  # no temperature: Haiku 5.5 rejects it with a 400
@@ -208,8 +228,7 @@ def build_session(brief: CallBrief) -> AgentSession:
             # First server-driven call (24 Oct, 16:49): a hesitant speaker ("Ähm, ja, es--", "Um ...",
             # "20 Uhr.") was chopped into a turn at every 0.5 s pause, and a single "G-" interrupted the
             # agent. Wait longer before closing a turn and require a real utterance to interrupt.
-            endpointing={"min_delay": float(os.getenv("CALL_ENDPOINT_MIN_S", "2.0")),
-                         "max_delay": float(os.getenv("CALL_ENDPOINT_MAX_S", "3.0"))},
+            endpointing=endpointing,
             interruption={"min_duration": float(os.getenv("CALL_INTERRUPT_MIN_S", "0.7")),
                           "min_words": int(os.getenv("CALL_INTERRUPT_MIN_WORDS", "2"))},
             preemptive_generation={"enabled": env_flag("CALL_PREEMPTIVE", True)},
