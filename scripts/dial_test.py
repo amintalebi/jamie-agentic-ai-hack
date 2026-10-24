@@ -61,6 +61,8 @@ async def main() -> int:
     p.add_argument("--lang", choices=["de", "en"], default="de")
     p.add_argument("--brief", help="path to a CallBrief JSON fixture; to_number and call_id are overridden")
     p.add_argument("--watch", type=int, default=150, help="seconds to watch the room before exiting")
+    p.add_argument("--caller", default="Alex", help="mock person the agent calls on behalf of (caller_name)")
+    p.add_argument("--booking-name", default="Alex Carter", help="name the booking is made under")
     p.add_argument("--server", default="http://127.0.0.1:8001",
                    help="where the worker posts CallEvents for this call; default is scripts/fake_server.py. "
                         "The real server rejects calls it did not place, so leave this on the fake server.")
@@ -82,6 +84,9 @@ async def main() -> int:
     else:
         brief = hello_brief(args.to, args.lang, call_id)
         metadata = {**brief.model_dump(), "mode": "hello"}  # agent.py swaps in a tiny hello prompt
+    # The teammate who answers plays the business, so the caller must be someone else.
+    metadata["caller_name"] = args.caller
+    metadata["user_facts"] = {**metadata.get("user_facts", {}), "name": args.caller, "booking_name": args.booking_name}
     metadata["server_url"] = args.server
 
     room = f"call-{call_id}"
@@ -89,7 +94,8 @@ async def main() -> int:
         dispatch = await lk.agent_dispatch.create_dispatch(
             api.CreateAgentDispatchRequest(agent_name=AGENT_NAME, room=room, metadata=json.dumps(metadata))
         )
-        print(f"dispatched {dispatch.id} agent={AGENT_NAME} room={room} to={mask_phone(args.to)} lang={args.lang}")
+        print(f"dispatched {dispatch.id} agent={AGENT_NAME} room={room} to={mask_phone(args.to)} lang={args.lang} "
+              f"caller={args.caller!r} booking={args.booking_name!r} goal={metadata['goal'][:60]!r}")
         print("watching the room; the worker terminal shows the conversation and latency lines")
 
         deadline = time.time() + args.watch
