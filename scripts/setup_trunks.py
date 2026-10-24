@@ -6,6 +6,8 @@
 Reads from .env: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_NUMBER, LIVEKIT_URL, LIVEKIT_API_KEY,
 LIVEKIT_API_SECRET. Optional: SIP_TRUNK_NAME (default "jamie"), SIP_AUTH_USERNAME, SIP_AUTH_PASSWORD
 (generated on first run and printed once; put them in .env so later runs reuse them).
+If the trunks already exist (teammate's env), set TWILIO_TRUNK_SID, TWILIO_TERMINATION_URI,
+TWILIO_CREDENTIAL_LIST_NAME and LIVEKIT_SIP_OUTBOUND_TRUNK_ID and the script only verifies them.
 
 Safe to re-run: it looks up each object by name before creating it. Twilio endpoints are from
 https://www.twilio.com/docs/sip-trunking/api (Trunks, Trunk CredentialLists, Trunk PhoneNumbers) and
@@ -53,6 +55,13 @@ class Twilio:
         return r.json()
 
     def trunk(self, name: str, domain: str) -> str:
+        known = os.getenv("TWILIO_TRUNK_SID")
+        if known:
+            t = self._ok(self.http.get(f"{TRUNKING}/Trunks/{known}"), f"get trunk {known}")
+            if t.get("domain_name") != domain:
+                sys.exit(f"TWILIO_TRUNK_SID {known} has domain {t.get('domain_name')}, expected {domain}")
+            print(f"twilio trunk verified: {known} {domain} auth={t.get('auth_type')}")
+            return known
         trunks = self._ok(self.http.get(f"{TRUNKING}/Trunks", params={"PageSize": 50}), "list trunks")["trunks"]
         for t in trunks:
             if t.get("domain_name") == domain:
@@ -101,10 +110,25 @@ class Twilio:
 async def livekit_trunk(name: str, domain: str, number: str, username: str, password: str) -> str:
     async with api.LiveKitAPI() as lk:
         existing = await lk.sip.list_sip_outbound_trunk(ListSIPOutboundTrunkRequest())
+        known = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID")
         for t in existing.items:
+            if known and t.sip_trunk_id == known:
+                problems = []
+                if t.address != domain:
+                    problems.append(f"address {t.address} != {domain}")
+                if number not in t.numbers:
+                    problems.append(f"number {mask_phone(number)} not in trunk numbers")
+                if t.auth_username != username:
+                    problems.append(f"auth user {t.auth_username!r} != {username!r}")
+                if problems:
+                    sys.exit(f"livekit trunk {known} does not match .env: " + "; ".join(problems))
+                print(f"livekit outbound trunk verified: {known} name={t.name!r} -> {t.address} user={t.auth_username}")
+                return known
             if t.name == name:
                 print(f"livekit outbound trunk exists: {t.sip_trunk_id} -> {t.address}")
                 return t.sip_trunk_id
+        if known:
+            sys.exit(f"LIVEKIT_SIP_OUTBOUND_TRUNK_ID {known} not found in this LiveKit project")
         info = SIPOutboundTrunkInfo(
             name=name,
             address=domain,
@@ -125,7 +149,8 @@ def main() -> None:
     args = p.parse_args()
 
     name = os.getenv("SIP_TRUNK_NAME", "jamie")
-    domain = f"{name}.pstn.twilio.com"
+    domain = os.getenv("TWILIO_TERMINATION_URI") or f"{name}.pstn.twilio.com"
+    cl_name = os.getenv("TWILIO_CREDENTIAL_LIST_NAME") or f"{name}-livekit"
     number = need("TWILIO_NUMBER")
     username = os.getenv("SIP_AUTH_USERNAME") or f"{name}-livekit"
     password = os.getenv("SIP_AUTH_PASSWORD")
@@ -137,7 +162,7 @@ def main() -> None:
     if not args.livekit_only:
         tw = Twilio(need("TWILIO_ACCOUNT_SID"), need("TWILIO_AUTH_TOKEN"))
         trunk_sid = tw.trunk(name, domain)
-        cl_sid = tw.credential_list(f"{name}-livekit", username, password)
+        cl_sid = tw.credential_list(cl_name, username, password)
         tw.attach_credential_list(trunk_sid, cl_sid)
         tw.attach_number(trunk_sid, number)
 

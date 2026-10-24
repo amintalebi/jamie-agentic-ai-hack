@@ -17,7 +17,7 @@ Env, all read after load_dotenv:
   ALLOWED_CALL_NUMBERS       comma-separated E.164; anything else is refused before dialing
   SERVER_PUBLIC_URL          where CallEvents go; default http://127.0.0.1:8001 (scripts/fake_server.py)
   CALL_LLM_MODEL             see config.py
-  ELEVENLABS_TTS_MODEL       default eleven_flash_v2_5
+  ELEVENLABS_TTS_MODEL       default eleven_v4_turbo
   ELEVENLABS_VOICE_ID_EN     optional; falls back to the DE voice
   CALL_AMD                   1 = answering machine detection before speaking; default 0 for the demo
   CALL_PREEMPTIVE            1 = start the LLM on the eager transcript (lower latency); default 1
@@ -135,7 +135,7 @@ def build_session(brief: CallBrief) -> AgentSession:
         voice = os.environ["ELEVENLABS_VOICE_ID_EN"]
     tts_kwargs = dict(
         api_key=os.environ["ELEVENLABS_API_KEY"],
-        model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
+        model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_v4_turbo"),  # measured 24 Oct: first audio 0.4 to 0.9 s vs 0.8 to 1.0 s for flash v2.5
         language=brief.language,
     )
     if voice:
