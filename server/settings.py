@@ -15,7 +15,16 @@ def env(name: str, default: str = "") -> str:
 MESSENGER_MODE = env("MESSENGER_MODE", "fake")   # fake | linq
 STT_MODE = env("STT_MODE", "fake")               # fake | scribe
 CALLS_MODE = env("CALLS_MODE", "fake")           # fake | livekit
+MEMORY_MODE = env("MEMORY_MODE", "qdrant")       # qdrant | fake
 DATABASE_URL = env("DATABASE_URL")               # empty = no database (fakes only)
+QDRANT_URL = env("QDRANT_URL")                   # empty = embedded local Qdrant (QDRANT_PATH or :memory:)
+QDRANT_API_KEY = env("QDRANT_API_KEY")
+QDRANT_PATH = env("QDRANT_PATH", "")             # optional local disk path when QDRANT_URL is empty
+ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
+ORCHESTRATOR_MODEL = env("ORCHESTRATOR_MODEL", "claude-sonnet-4-6")
+# Seed identity for a user we have never seen, so the demo works on a fresh database.
+DEMO_USER_NAME = env("DEMO_USER_NAME", "Sina")
+DEMO_BUSINESS_NAME = env("DEMO_BUSINESS_NAME", "Trattoria da Demo")
 CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
 DASHBOARD_TOKEN = env("DASHBOARD_TOKEN")             # bearer token for /api/dashboard
 LINQ_API_KEY = env("LINQ_API_KEY")
