@@ -17,7 +17,6 @@ STT_MODE = env("STT_MODE", "fake")               # fake | scribe
 CALLS_MODE = env("CALLS_MODE", "fake")           # fake | livekit
 DATABASE_URL = env("DATABASE_URL")               # empty = no database (fakes only)
 CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
-DASHBOARD_TOKEN = env("DASHBOARD_TOKEN")             # bearer token for /api/dashboard
 LINQ_API_KEY = env("LINQ_API_KEY")
 LINQ_WEBHOOK_SECRET = env("LINQ_WEBHOOK_SECRET")     # whsec_...; empty = signatures not checked
 ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY")
