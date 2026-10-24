@@ -21,6 +21,9 @@ TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN")
 TWILIO_SMS_FROM = env("TWILIO_SMS_FROM") or env("TWILIO_NUMBER")  # must be SMS-capable
 TWILIO_MESSAGING_SERVICE_SID = env("TWILIO_MESSAGING_SERVICE_SID")  # optional, wins over TWILIO_SMS_FROM
 AUTH_SECRET = env("AUTH_SECRET")                 # signs dashboard sessions; empty = random per restart
+# Host the dashboard PWA is served from. Adds "@host #code" to the login SMS so
+# iOS and Android can autofill the code (origin-bound one-time codes, WebOTP). Empty: plain SMS.
+APP_DOMAIN = env("APP_DOMAIN", "jamie-agentic-hack.app")
 DATABASE_URL = env("DATABASE_URL")               # empty = no database (fakes only)
 CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
 LINQ_API_KEY = env("LINQ_API_KEY")

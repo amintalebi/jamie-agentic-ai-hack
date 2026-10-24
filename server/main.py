@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 
-from server import auth, calls, dashboard, db, gateway, history, settings
+from server import auth, calls, dashboard, db, gateway, history, settings, users
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("server")
@@ -17,6 +17,7 @@ log = logging.getLogger("server")
 async def lifespan(app: FastAPI):
     await db.open_pool()
     await history.init()
+    await users.init()
     log.info("modes: messenger=%s stt=%s calls=%s sms=%s", settings.MESSENGER_MODE, settings.STT_MODE,
              settings.CALLS_MODE, settings.SMS_MODE)
     await auth.check_connection()

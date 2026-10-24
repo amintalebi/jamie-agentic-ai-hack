@@ -1,8 +1,8 @@
 import { Renderer } from "@openuidev/react-lang";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  AuthError, clearPhone, fetchScreen, getPhone, getToken, normalisePhone, requestCode, setPhone, setToken,
-  verifyCode, type Screen,
+  ApiError, AuthError, clearPhone, fetchScreen, getPhone, getToken, normalisePhone, readSmsCode, requestCode,
+  setPhone, setToken, verifyCode, type Screen,
 } from "./api";
 import { library } from "./library";
 
@@ -35,12 +35,14 @@ export function App() {
   const path = apiPath(hash);
   const [state, setState] = useState<State>({ kind: "loading" });
   const [token, setTokenState] = useState(getToken);
+  const [welcome, setWelcome] = useState(false);
   const loggedIn = Boolean(token);
 
   function logout() {
     setToken("");
     clearPhone();
     setTokenState("");
+    setWelcome(false);
   }
 
   useEffect(() => {
@@ -106,9 +108,26 @@ export function App() {
           </button>
         )}
       </header>
-      {!loggedIn && <LoginForm onLoggedIn={(t) => { setToken(t); setTokenState(t); }} />}
+      {!loggedIn && (
+        <LoginForm
+          onLoggedIn={(t, newUser) => {
+            setToken(t);
+            setTokenState(t);
+            setWelcome(newUser);
+          }}
+        />
+      )}
       {loggedIn && (
         <>
+          {welcome && (
+            <div className="page card welcome">
+              <p>
+                <strong>Welcome to Jamie!</strong> We just sent you an iMessage. Reply there to make your first
+                request, like "book a table for 4 tomorrow at 8".
+              </p>
+              <button type="button" className="link" onClick={() => setWelcome(false)}>Got it</button>
+            </div>
+          )}
           {state.kind === "loading" && <div className="page muted">Loading…</div>}
           {state.kind === "error" && <div className="page card error">Could not load: {state.message}</div>}
           {state.kind === "ok" && (
@@ -125,13 +144,31 @@ export function App() {
   );
 }
 
-/** Two steps: phone number, then the 6-digit code Twilio texts to it. */
-function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
+/** Seconds left until `until` (ms timestamp), ticking every second. */
+function useCountdown(until: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (until <= Date.now()) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [until]);
+  return Math.max(0, Math.ceil((until - now) / 1000));
+}
+
+/**
+ * Signup and login in one: phone number, then the 6-digit code Twilio texts to it.
+ * The code autofills (iOS keyboard suggestion via autocomplete="one-time-code", Android via WebOTP)
+ * and the form submits itself once 6 digits are in.
+ */
+function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string, newUser: boolean) => void }) {
   const [value, setValue] = useState(getPhone);
   const [phone, setPhoneSent] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [resendAt, setResendAt] = useState(0);
+  const wait = useCountdown(resendAt);
+  const lastTried = useRef("");
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -139,6 +176,7 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
     try {
       await action();
     } catch (e) {
+      if (e instanceof ApiError && e.retryAfter) setResendAt(Date.now() + e.retryAfter * 1000);
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -147,11 +185,36 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
 
   const sendCode = (p: string) =>
     run(async () => {
-      await requestCode(p);
+      const retryAfter = await requestCode(p);
       setPhone(p);
       setPhoneSent(p);
       setCode("");
+      lastTried.current = "";
+      setResendAt(Date.now() + retryAfter * 1000);
     });
+
+  const submitCode = (c: string) => {
+    lastTried.current = c;
+    return run(async () => {
+      const { token, newUser } = await verifyCode(phone, c);
+      onLoggedIn(token, newUser);
+    });
+  };
+
+  // Android Chrome: take the code straight from the SMS while the code step is open.
+  useEffect(() => {
+    if (!phone) return;
+    const ctrl = new AbortController();
+    readSmsCode(ctrl.signal).then((c) => {
+      if (c && !ctrl.signal.aborted) setCode(c.replace(/\D/g, "").slice(0, 6));
+    });
+    return () => ctrl.abort();
+  }, [phone, resendAt]);
+
+  // Submit once a full code is in (typed, pasted or autofilled), once per code.
+  useEffect(() => {
+    if (phone && code.length === 6 && !busy && code !== lastTried.current) submitCode(code);
+  }, [code, phone, busy]);
 
   if (!phone) {
     return (
@@ -163,8 +226,8 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
           if (p) sendCode(p);
         }}
       >
-        <h2>Your phone number</h2>
-        <p className="muted">Log in with the number you text Jamie from. We will text you a code.</p>
+        <h2>Sign up or log in</h2>
+        <p className="muted">Use the number you text Jamie from. We will text you a code. New here? This creates your account.</p>
         <input
           type="tel"
           inputMode="tel"
@@ -176,7 +239,9 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
           aria-label="Phone number"
         />
         {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={busy || !normalisePhone(value)}>{busy ? "Sending…" : "Text me a code"}</button>
+        <button type="submit" disabled={busy || wait > 0 || !normalisePhone(value)}>
+          {busy ? "Sending…" : wait > 0 ? `Try again in ${wait} s` : "Text me a code"}
+        </button>
       </form>
     );
   }
@@ -186,27 +251,30 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
       className="page card phone"
       onSubmit={(e) => {
         e.preventDefault();
-        run(async () => onLoggedIn(await verifyCode(phone, code)));
+        if (code.length === 6) submitCode(code);
       }}
     >
       <h2>Enter the code</h2>
       <p className="muted">We texted a 6-digit code to {phone}.</p>
       <input
         type="text"
+        name="one-time-code"
         inputMode="numeric"
         autoComplete="one-time-code"
         pattern="[0-9]*"
         maxLength={6}
         placeholder="123456"
         value={code}
-        onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+        onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
         autoFocus
         aria-label="Login code"
       />
       {error && <p className="error">{error}</p>}
       <button type="submit" disabled={busy || code.length !== 6}>{busy ? "Checking…" : "Log in"}</button>
       <div className="row">
-        <button type="button" className="link" disabled={busy} onClick={() => sendCode(phone)}>Send a new code</button>
+        <button type="button" className="link" disabled={busy || wait > 0} onClick={() => sendCode(phone)}>
+          {wait > 0 ? `New code in ${wait} s` : "Send a new code"}
+        </button>
         <button type="button" className="link" disabled={busy} onClick={() => { setPhoneSent(""); setError(""); }}>
           Change number
         </button>
