@@ -10,7 +10,7 @@ Sent as LiveKit agent-dispatch metadata (JSON) when a call is placed.
 | --- | --- | --- |
 | `call_id` | str | Also the LiveKit room name. `calls.place_call` fills it in when passed `""` |
 | `user_id` | str | The user's E.164 phone number |
-| `to_number` | str | Business number, E.164. Must be in `ALLOWED_CALL_NUMBERS` |
+| `to_number` | str | Business number, E.164. With `SAFE_MODE` on the call rings `SAFE_MODE_NUMBER` instead |
 | `language` | `"de"` or `"en"` | Language of the call |
 | `caller_name` | str | Who we call for, e.g. "Sina" |
 | `goal` | str | "Book a table for 4, Sat 25 Oct, 20:00, inside" |

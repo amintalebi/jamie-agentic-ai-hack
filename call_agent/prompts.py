@@ -9,7 +9,19 @@ from contracts_local import CallBrief  # TODO(hack): switch to server.contracts
 # Phrasing avoids gendered pronouns for caller_name ("wir", "von {name}").
 
 
+# Set per job by agent.py from the server's dial plan: a real business answers (SAFE_MODE off).
+_real_business = False
+
+
+def set_real_business(value: bool) -> None:
+    global _real_business
+    _real_business = value
+
+
 def _disclose_ai() -> bool:
+    # Real businesses always hear that an assistant is calling.
+    if _real_business:
+        return True
     return os.getenv("DISCLOSE_AI", "false").strip().lower() in ("1", "true", "yes")
 
 

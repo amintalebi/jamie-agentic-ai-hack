@@ -14,7 +14,7 @@ line and the request. If the callee stays silent after pickup, we open after CAL
 Env, all read after load_dotenv:
   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_SIP_OUTBOUND_TRUNK_ID
   RESON8_API_KEY, ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID_DE
-  ALLOWED_CALL_NUMBERS       comma-separated E.164; anything else is refused before dialing
+  (SAFE_MODE is decided by the server and arrives as dial_number/real_business in the job metadata)
   SERVER_PUBLIC_URL          where CallEvents go; default http://127.0.0.1:8001 (scripts/fake_server.py)
   CALL_LLM_MODEL             see config.py
   ELEVENLABS_TTS_MODEL       default eleven_v4_turbo
@@ -77,6 +77,8 @@ except ImportError:  # pragma: no cover
 from config import call_llm_model  # noqa: E402
 from contracts_local import CallBrief, CallEvent  # noqa: E402  TODO(hack): switch to server.contracts
 from events import EventsClient, mask_phone  # noqa: E402
+from common.safe_mode import DialPlan, check_plan, normalize  # noqa: E402  (contracts_local put the repo root on sys.path)
+import prompts  # noqa: E402
 from prompts import build_instructions, opening_line  # noqa: E402
 from style import strip_tags, style_addendum  # noqa: E402
 from tools import CallTools, Transcript, make_tools  # noqa: E402
@@ -94,10 +96,6 @@ def env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def allowed_numbers() -> set[str]:
-    return {n.strip() for n in os.getenv("ALLOWED_CALL_NUMBERS", "").split(",") if n.strip()}
-
-
 def parse_job(ctx: JobContext) -> tuple[CallBrief, str, str | None]:
     """Returns (brief, mode, server_url). mode is "call", "hello" (dial_test) or "console" (no phone).
     server_url lets dial_test point events at the fake server; the real server never sets it."""
@@ -109,6 +107,16 @@ def parse_job(ctx: JobContext) -> tuple[CallBrief, str, str | None]:
     data = json.loads(raw)
     brief = CallBrief.model_validate(data)
     return brief, ("hello" if data.get("mode") == "hello" else "call"), data.get("server_url")
+
+
+def dial_plan(ctx: JobContext, brief: CallBrief) -> DialPlan:
+    """The server's dial decision from the dispatch metadata (common/safe_mode.py). dial_test carries
+    none: then dial brief.to_number (the operator chose it)."""
+    try:
+        data = json.loads(ctx.job.metadata or "{}")
+    except ValueError:
+        data = {}
+    return DialPlan(normalize(data.get("dial_number") or brief.to_number), bool(data.get("real_business")))
 
 
 def hello_instructions(brief: CallBrief) -> str:
@@ -395,6 +403,8 @@ server = AgentServer()
 @server.rtc_session(agent_name=AGENT_NAME)
 async def call_session(ctx: JobContext) -> None:
     brief, mode, server_url = parse_job(ctx)
+    plan = dial_plan(ctx, brief)
+    prompts.set_real_business(plan.real_business)  # before any prompt or opening line is built
     ctx.log_context_fields = {"room": ctx.room.name, "call_id": brief.call_id}
     log.info("job mode=%s call=%s to=%s lang=%s goal=%r", mode, brief.call_id, mask_phone(brief.to_number), brief.language, brief.goal[:80])
 
@@ -405,9 +415,10 @@ async def call_session(ctx: JobContext) -> None:
 
     trunk_id = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID", "")
     if mode != "console":
-        if brief.to_number not in allowed_numbers():
-            log.error("refused: %s is not in ALLOWED_CALL_NUMBERS", mask_phone(brief.to_number))
-            await post_failed(events, brief, "Refused: the number is not in the allowed list")
+        reason = check_plan(plan)
+        if reason:
+            log.error("refused: %s: %s", mask_phone(plan.dial_number), reason)
+            await post_failed(events, brief, f"Refused: {reason}")
             ctx.shutdown("number not allowed")
             return
         if not trunk_id:
@@ -440,7 +451,7 @@ async def call_session(ctx: JobContext) -> None:
         return
 
     dial_timeout = float(os.getenv("CALL_DIAL_TIMEOUT_S", "45"))
-    log.info("dialing %s via trunk %s (timeout %.0fs)", mask_phone(brief.to_number), trunk_id, dial_timeout)
+    log.info("dialing %s via trunk %s (timeout %.0fs)", mask_phone(plan.dial_number), trunk_id, dial_timeout)
     t_dial = time.monotonic()
     async with contextlib.AsyncExitStack() as stack:
         detector = None
@@ -453,7 +464,7 @@ async def call_session(ctx: JobContext) -> None:
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
                     sip_trunk_id=trunk_id,
-                    sip_call_to=brief.to_number,
+                    sip_call_to=plan.dial_number,
                     participant_identity=sip_identity,
                     participant_name=f"{brief.caller_name}'s assistant",
                     wait_until_answered=True,
