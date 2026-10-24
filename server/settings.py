@@ -49,7 +49,8 @@ LOCAL_SERVER_URL = env("LOCAL_SERVER_URL", "http://127.0.0.1:8000")
 
 
 def allowed_call_numbers() -> set[str]:
-    return {n.strip() for n in env("ALLOWED_CALL_NUMBERS").split(",") if n.strip()}
+    from common.safe_mode import allowed_numbers  # one parser for server and call agent
+    return allowed_numbers()
 
 
 def demo_users() -> set[str]:

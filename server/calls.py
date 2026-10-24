@@ -5,6 +5,7 @@ The finished call record is saved by the orchestrator through memory.save_call.
 """
 import asyncio
 import hmac
+import json
 import logging
 import time
 import uuid
@@ -17,7 +18,7 @@ from livekit import api as lk_api
 
 from common.contracts import CallBrief, CallEvent
 from common.masking import mask_phone, mask_text
-from common.safe_mode import NotDialable, number_to_dial, safe_mode
+from common.safe_mode import DialPlan, NotDialable, normalize, plan_dial
 from server import gateway, history, memory, orchestrator, settings
 
 log = logging.getLogger("server.calls")
@@ -58,7 +59,7 @@ def _spawn(coro) -> None:
 # --- dispatchers ---------------------------------------------------------------
 
 class CallDispatcher(Protocol):
-    async def dispatch(self, brief: CallBrief) -> None: ...
+    async def dispatch(self, brief: CallBrief, plan: DialPlan) -> None: ...
 
 
 class LiveKitDispatcher:
@@ -69,12 +70,15 @@ class LiveKitDispatcher:
 
     TIMEOUT_S = 15
 
-    async def dispatch(self, brief: CallBrief) -> None:
+    async def dispatch(self, brief: CallBrief, plan: DialPlan) -> None:
         room = f"call-{brief.call_id}"
+        # The brief plus the server's dial decision (common/safe_mode.py); CallBrief ignores the extra keys.
+        metadata = json.dumps({**brief.model_dump(), "dial_number": plan.dial_number,
+                               "real_business": plan.real_business})
         start = time.monotonic()
         async with lk_api.LiveKitAPI() as lk:
             dispatch = await asyncio.wait_for(lk.agent_dispatch.create_dispatch(lk_api.CreateAgentDispatchRequest(
-                agent_name=settings.CALL_AGENT_NAME, room=room, metadata=brief.model_dump_json())), self.TIMEOUT_S)
+                agent_name=settings.CALL_AGENT_NAME, room=room, metadata=metadata)), self.TIMEOUT_S)
         log.info("dispatched call %s to agent %s in room %s (dispatch %s, %.0f ms)", brief.call_id,
                  settings.CALL_AGENT_NAME, room, dispatch.id, (time.monotonic() - start) * 1000)
 
@@ -82,7 +86,7 @@ class LiveKitDispatcher:
 class FakeDispatcher:
     """Plays a scripted call over HTTP against this server, like the real call agent would."""
 
-    async def dispatch(self, brief: CallBrief) -> None:
+    async def dispatch(self, brief: CallBrief, plan: DialPlan) -> None:
         _spawn(self._run(brief))
 
     async def _run(self, brief: CallBrief) -> None:
@@ -117,25 +121,25 @@ dispatcher: CallDispatcher = LiveKitDispatcher() if settings.CALLS_MODE == "live
 
 async def place_call(brief: CallBrief) -> str:
     """Dial brief.to_number. Pass call_id="" to get a fresh id. Returns the call_id.
-    Safe mode redirects the call to an allowed stand-in number (see common/safe_mode.py).
-    Raises CallRefused for numbers we may not dial."""
+    The brief keeps the business's own number; safe mode only changes what the agent dials
+    (see common/safe_mode.py). Raises CallRefused for numbers we may not dial."""
+    brief = brief.model_copy(update={"to_number": normalize(brief.to_number)})
     try:
-        dial = number_to_dial(brief.to_number)
+        plan = plan_dial(brief.to_number)
     except NotDialable as e:
         log.warning("refused call to %s: %s", mask_phone(brief.to_number), e)
         raise CallRefused(str(e)) from e
-    if dial != brief.to_number:
-        log.info("SAFE_MODE: call for %s goes to stand-in %s", mask_phone(brief.to_number), mask_phone(dial))
-        brief = brief.model_copy(update={"to_number": dial})
-    elif not safe_mode():
-        log.warning("SAFE_MODE off: dialling the real number %s", mask_phone(dial))
+    if plan.real_business:
+        log.warning("SAFE_MODE off: dialling the real number %s", mask_phone(plan.dial_number))
+    elif plan.dial_number != brief.to_number:
+        log.info("SAFE_MODE: call for %s rings stand-in %s", mask_phone(brief.to_number), mask_phone(plan.dial_number))
     if not brief.call_id:
         brief = brief.model_copy(update={"call_id": uuid.uuid4().hex[:12]})
     _calls[brief.call_id] = CallState(brief=brief)
     log.info("placing call %s to %s via %s", brief.call_id, mask_phone(brief.to_number), settings.CALLS_MODE)
     history.call_placed(brief)  # queued first, so this call's later writes find the row
     try:
-        await dispatcher.dispatch(brief)
+        await dispatcher.dispatch(brief, plan)
     except Exception as e:
         _calls.pop(brief.call_id, None)
         log.exception("dispatch failed for call %s", brief.call_id)

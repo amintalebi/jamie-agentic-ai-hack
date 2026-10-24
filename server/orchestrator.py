@@ -20,6 +20,7 @@ from typing_extensions import TypedDict
 
 from common.contracts import CallBrief, CallEvent
 from common.masking import mask_phone
+from common.safe_mode import normalize, safe_mode
 from server import calls, gateway, memory, search, settings
 
 log = logging.getLogger("server.orchestrator")
@@ -223,7 +224,35 @@ class TurnTracker:
         self.placed_call_id: str | None = None
 
 
+# Numbers a user confirmed in a poll ("Call X on +49...?" -> "Yes, call"), so place_call can check in
+# code, not just in the prompt, that a number from the web was approved. In memory: a restart forgets.
+_NUMBER_RE = re.compile(r"(?:\+|00)\d[\d\s\-/().]{6,}\d")
+_pending_confirm: dict[str, set[str]] = {}   # user_id -> numbers shown in the last poll
+_confirmed_numbers: dict[str, set[str]] = {}  # user_id -> numbers the user said yes to
+
+
+def _numbers_in(text: str) -> set[str]:
+    return {normalize(m) for m in _NUMBER_RE.findall(text or "")}
+
+
+def _note_poll_answer(user_id: str, text: str) -> None:
+    """A vote on a poll that showed phone numbers: "Yes..." confirms them, anything else drops them."""
+    numbers = _pending_confirm.pop(user_id, None)
+    if numbers and text.strip().lower().startswith("yes"):
+        _confirmed_numbers.setdefault(user_id, set()).update(numbers)
+
+
+def _trusted_numbers(user_id: str, facts: dict[str, str], found: set[str]) -> set[str]:
+    """Numbers place_call accepts without a fresh confirmation: allowed list, find_business hits this
+    turn, numbers already in the user's memory, and numbers the user confirmed in a poll."""
+    trusted = set(settings.allowed_call_numbers()) | found | _confirmed_numbers.get(user_id, set())
+    for v in facts.values():
+        trusted |= _numbers_in(v)
+    return trusted
+
+
 def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) -> list:
+    found_numbers: set[str] = set()  # from find_business this turn
     @tool("ask_user", args_schema=AskUserArgs)
     async def ask_user_tool(question: str, options: list[str]) -> str:
         """Send an iMessage poll to ask the user a clarifying question. Ends the current turn."""
@@ -235,6 +264,9 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
             user_id, "assistant", f"[Poll] {q_clean} ({', '.join(opts_clean)})"
         )
         await gateway.send_poll(user_id, q_clean, opts_clean)
+        shown = _numbers_in(q_clean)
+        if shown:
+            _pending_confirm[user_id] = shown
         tracker.asked_user = True
         return "Poll sent to user. Stop now and wait for the user's vote."
 
@@ -261,6 +293,9 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
     async def find_business_tool(query: str) -> str:
         """Look up businesses by name or kind in the seeded businesses directory."""
         hits = await memory.find_business(query)
+        for h in hits:
+            if isinstance(h, dict) and h.get("phone"):
+                found_numbers.add(normalize(str(h["phone"])))
         return json.dumps(hits, ensure_ascii=False)
 
     @tool("search_restaurants", args_schema=SearchRestaurantsArgs)
@@ -289,6 +324,12 @@ def _make_turn_tools(user_id: str, facts: dict[str, str], tracker: TurnTracker) 
         must_ask_user_for: list[str] | None = None,
     ) -> str:
         """Place a phone call to a business via the voice call agent."""
+        # Safe mode always rings an allowed stand-in, so only real calls need the user's explicit OK.
+        if not safe_mode() and normalize(to_number) not in _trusted_numbers(user_id, facts, found_numbers):
+            log.warning("place_call blocked for %s: number not confirmed by the user", mask_phone(user_id))
+            return ("ERROR: the user has not confirmed this number. Ask with ask_user first, showing the "
+                    "restaurant name and this exact number, e.g. 'Call Roma on +49 30 1234567?' with "
+                    "['Yes, call', 'No'], and call only after they answer Yes.")
         if not facts.get("name"):
             # Only the demo phones start with a name; anyone else must say theirs first.
             return ("ERROR: you don't know the user's name yet. Ask them what name to book under, "
@@ -530,6 +571,7 @@ async def _fallback_turn(user_id: str, text: str) -> None:
 async def handle_message(user_id: str, text: str) -> None:
     """Run one orchestrator turn for a new user message (text or voice-note transcript)."""
     await memory.log_message(user_id, "user", text)
+    _note_poll_answer(user_id, text)
     if text.strip().lower().startswith("/call"):
         await _demo_call(user_id)
         return

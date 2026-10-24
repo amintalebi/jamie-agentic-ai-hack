@@ -2,7 +2,8 @@
 
 Docs: https://api-docs.deepseek.com/guides/search/
 POST https://api.deepseek.com/v1/tools/search with {"query", "count"} -> {"results": [...]}.
-Search only suggests places: numbers found on the web are never dialled (see orchestrator prompt).
+Numbers found here may be called after the user confirms them in a poll (orchestrator place_call);
+with SAFE_MODE on the call still rings an allowed stand-in (common/safe_mode.py).
 """
 import logging
 import time
