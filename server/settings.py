@@ -39,6 +39,7 @@ CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
 LINQ_API_KEY = env("LINQ_API_KEY")
 LINQ_WEBHOOK_SECRET = env("LINQ_WEBHOOK_SECRET")     # whsec_...; empty = signatures not checked
 ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY")
+DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY")       # search_restaurants tool; empty = search unavailable
 SERVER_PUBLIC_URL = env("SERVER_PUBLIC_URL").rstrip("/")
 # Shared with the call agent; it sends it as a bearer token on /calls/{id}/events and /answer.
 # Empty = those routes are open (set it on the call agent first, then here).
