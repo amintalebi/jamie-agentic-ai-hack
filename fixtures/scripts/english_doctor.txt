@@ -1,0 +1,17 @@
+# English version of doctor_basic.txt. No allowed decisions: any offered date must go to ask_user.
+# brief: fixtures/brief_doctor_en.json
+B: Doctor Weber's practice, good morning?
+# expect no ask_user
+B: We have an appointment free on Thursday at nine thirty.
+# expect ask_user
+U: Yes
+B: Are you on public or private insurance?
+# expect no ask_user
+# expect say matches public
+B: Good, I'll put Sina down for Thursday at nine thirty. Please bring your insurance card.
+# expect no ask_user
+B: Wonderful, see you Thursday, goodbye!
+# expect end_call outcome=success
+# expect poll english
+# expect goodbye
+# expect confirm at most once

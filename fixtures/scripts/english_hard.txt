@@ -1,0 +1,18 @@
+# English version of italian_hard.txt. 8:30 is inside the allowed 30 min -> accept alone.
+# Callback number -> digit pairs in English words. Then the restaurant notices it is closed
+# on Sundays -> ask about another date, user says No.
+# brief: fixtures/brief_italian_en.json
+B: Roma Restaurant, good evening?
+# expect no ask_user
+B: Eight is fully booked, but I could do eight thirty, a table for four inside.
+# expect no ask_user
+B: Can I get a callback number?
+# expect no ask_user
+# expect say matches zero one, five one, zero zero, zero zero, zero zero, zero two
+B: Oh, sorry, I just noticed we're actually closed on Sundays.
+# expect ask_user
+U: No
+B: That's a shame, sorry about that. Goodbye!
+# expect end_call outcome=failed|partial
+# expect poll english
+# expect goodbye

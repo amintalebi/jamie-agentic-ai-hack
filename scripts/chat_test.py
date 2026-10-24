@@ -14,6 +14,7 @@ Script format: "B: <business line>", "U: <poll answer>" (queued for the next ask
 preceding B: turn), "# expect end_call outcome=success|partial" and "# expect poll english"
 (whole call; checks the polls as posted, so only translated with --server),
 "# expect confirm at most once" (whole call: the agent's confirmation question appears 0 or 1 times),
+"# expect goodbye" (whole call: the reply that calls end_call also says goodbye),
 "# brief: <path>" (default brief). Other "#" lines are comments.
 """
 import argparse
@@ -143,6 +144,7 @@ class CallLog:
     end_outcome: str | None = None
     ended: bool = False
     said: list[str] = field(default_factory=list)  # every agent utterance in the call
+    end_said: str = ""  # text spoken in the same reply as end_call
 
 
 async def run_turn(client, model: str, effort: str, system: str, messages: list,
@@ -196,7 +198,7 @@ async def run_turn(client, model: str, effort: str, system: str, messages: list,
                 details = block.input.get("details", {})
                 print(f"[END_CALL] outcome={outcome} details={json.dumps(details, ensure_ascii=False)}")
                 out = await tools.end_call(outcome, details)
-                call.ended, call.end_outcome = True, outcome
+                call.ended, call.end_outcome, call.end_said = True, outcome, "".join(said)
             else:
                 out = f"Unknown tool {block.name}"
             results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
@@ -226,7 +228,7 @@ def parse_script(path: Path) -> tuple[str | None, list[ScriptTurn], list[str]]:
             brief_path = s.split(":", 1)[1].strip()
         elif s.startswith("# expect "):
             exp = s[len("# expect "):].strip()
-            call_level = exp.startswith(("end_call", "poll", "confirm"))
+            call_level = exp.startswith(("end_call", "poll", "confirm", "goodbye"))
             (call_expects if call_level else turns[-1].expects).append(exp)
     return brief_path, turns, call_expects
 
@@ -245,13 +247,16 @@ def check_turn(exp: str, turn: TurnLog | None) -> tuple[bool, str]:
     return False, f"unknown expectation {exp!r}"
 
 
-CONFIRM_RE = re.compile(r"passt (das |es )?so|stimmt (das |es )?so|is that right", re.IGNORECASE)
+GOODBYE_RE = re.compile(r"\b(good ?bye|bye|see you|take care)\b|auf wiederh[öo]ren|tsch[üu]ss", re.IGNORECASE)
+CONFIRM_RE = re.compile(r"passt (das |es )?so|stimmt (das |es )?so|is that (right|correct)|does that sound right", re.IGNORECASE)
 
 
 def check_call(exp: str, call: CallLog, polls: list[tuple[str, list[str]]]) -> tuple[bool, str]:
     if exp == "confirm at most once":
         n = sum(len(CONFIRM_RE.findall(t)) for t in call.said)
         return n <= 1, f"confirmation questions={n}"
+    if exp == "goodbye":
+        return bool(GOODBYE_RE.search(call.end_said)), f"said with end_call={call.end_said!r}"
     if exp == "poll english":
         german = [p for p in polls if looks_german(*p)]
         return not german, f"german polls={german}" if german else f"{len(polls)} polls"
