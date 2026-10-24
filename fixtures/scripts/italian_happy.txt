@@ -17,7 +17,9 @@ U: Yes
 B: Moment, bin ich hier mit einem Computer?
 # expect no ask_user
 # expect say matches \bja\b
-B: Alles klar, bis morgen!
+B: Gut, dann trage ich das so ein.
 # expect no ask_user
+B: Alles klar, bis morgen!
 # expect end_call outcome=success
 # expect poll english
+# expect confirm at most once

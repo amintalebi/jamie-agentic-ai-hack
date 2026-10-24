@@ -13,6 +13,7 @@ Script format: "B: <business line>", "U: <poll answer>" (queued for the next ask
 "# expect ask_user" / "# expect no ask_user" / "# expect say matches <regex>" (about the
 preceding B: turn), "# expect end_call outcome=success|partial" and "# expect poll english"
 (whole call; checks the polls as posted, so only translated with --server),
+"# expect confirm at most once" (whole call: the agent's confirmation question appears 0 or 1 times),
 "# brief: <path>" (default brief). Other "#" lines are comments.
 """
 import argparse
@@ -141,6 +142,7 @@ class CallLog:
     ttfts: list[float] = field(default_factory=list)
     end_outcome: str | None = None
     ended: bool = False
+    said: list[str] = field(default_factory=list)  # every agent utterance in the call
 
 
 async def run_turn(client, model: str, effort: str, system: str, messages: list,
@@ -170,6 +172,7 @@ async def run_turn(client, model: str, effort: str, system: str, messages: list,
         if said:
             print()
             turn.said.append("".join(said))
+            call.said.append("".join(said))
             transcript.add("agent", "".join(said))
         total = time.perf_counter() - t0
         if ttft is not None:
@@ -223,7 +226,7 @@ def parse_script(path: Path) -> tuple[str | None, list[ScriptTurn], list[str]]:
             brief_path = s.split(":", 1)[1].strip()
         elif s.startswith("# expect "):
             exp = s[len("# expect "):].strip()
-            call_level = exp.startswith(("end_call", "poll"))
+            call_level = exp.startswith(("end_call", "poll", "confirm"))
             (call_expects if call_level else turns[-1].expects).append(exp)
     return brief_path, turns, call_expects
 
@@ -242,7 +245,13 @@ def check_turn(exp: str, turn: TurnLog | None) -> tuple[bool, str]:
     return False, f"unknown expectation {exp!r}"
 
 
+CONFIRM_RE = re.compile(r"passt (das |es )?so|stimmt (das |es )?so|is that right", re.IGNORECASE)
+
+
 def check_call(exp: str, call: CallLog, polls: list[tuple[str, list[str]]]) -> tuple[bool, str]:
+    if exp == "confirm at most once":
+        n = sum(len(CONFIRM_RE.findall(t)) for t in call.said)
+        return n <= 1, f"confirmation questions={n}"
     if exp == "poll english":
         german = [p for p in polls if looks_german(*p)]
         return not german, f"german polls={german}" if german else f"{len(polls)} polls"
