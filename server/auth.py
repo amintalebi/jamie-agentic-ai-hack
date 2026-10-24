@@ -88,6 +88,59 @@ class TwilioSmsSender:
         log.info("sent sms to %s (sid %s)", mask_phone(to), r.json().get("sid"))
 
 
+async def check_connection() -> bool:
+    """Startup check: log whether Twilio is reachable, the credentials work and the sender can send SMS.
+    Never raises, so a Twilio problem cannot stop the server from starting."""
+    if settings.SMS_MODE != "twilio":
+        log.info("sms: fake mode, login codes go to the log (no Twilio check)")
+        return True
+    sid, token = settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN
+    if not (sid and token):
+        log.error("sms: Twilio connection FAILED: TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN missing")
+        return False
+    base = f"https://api.twilio.com/2010-04-01/Accounts/{sid}"
+    try:
+        async with httpx.AsyncClient(timeout=10, auth=(sid, token)) as http:
+            r = await http.get(f"{base}.json")
+            if r.status_code != 200:
+                log.error("sms: Twilio connection FAILED: HTTP %s on account lookup (check SID / auth token)",
+                          r.status_code)
+                return False
+            status = r.json().get("status")
+            if status != "active":
+                log.error("sms: Twilio connection FAILED: account status is %r", status)
+                return False
+
+            if settings.TWILIO_MESSAGING_SERVICE_SID:
+                r = await http.get(f"https://messaging.twilio.com/v1/Services/{settings.TWILIO_MESSAGING_SERVICE_SID}")
+                if r.status_code != 200:
+                    log.error("sms: Twilio connected, but messaging service lookup FAILED: HTTP %s", r.status_code)
+                    return False
+                log.info("sms: Twilio connection OK, sending via messaging service %r", r.json().get("friendly_name"))
+                return True
+
+            sender_number = settings.TWILIO_SMS_FROM
+            if not sender_number:
+                log.error("sms: Twilio connected, but no sender: set TWILIO_NUMBER")
+                return False
+            r = await http.get(f"{base}/IncomingPhoneNumbers.json", params={"PhoneNumber": sender_number})
+            numbers = r.json().get("incoming_phone_numbers", []) if r.status_code == 200 else []
+            if not numbers:
+                log.error("sms: Twilio connected, but sender %s is not a number on this account",
+                          mask_phone(sender_number))
+                return False
+            if not numbers[0].get("capabilities", {}).get("sms"):
+                log.error("sms: Twilio connected, but sender %s CANNOT send SMS (voice only?); "
+                          "set an SMS-capable TWILIO_SMS_FROM or TWILIO_MESSAGING_SERVICE_SID",
+                          mask_phone(sender_number))
+                return False
+    except (httpx.HTTPError, ValueError) as exc:
+        log.error("sms: Twilio connection FAILED: %s", exc)
+        return False
+    log.info("sms: Twilio connection OK, sending from %s", mask_phone(sender_number))
+    return True
+
+
 _sender: SmsSender | None = None
 
 

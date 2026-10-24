@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
     await history.init()
     log.info("modes: messenger=%s stt=%s calls=%s sms=%s", settings.MESSENGER_MODE, settings.STT_MODE,
              settings.CALLS_MODE, settings.SMS_MODE)
+    await auth.check_connection()
     yield
     await history.flush()
     await db.close_pool()
