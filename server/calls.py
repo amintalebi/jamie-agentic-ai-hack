@@ -5,12 +5,14 @@ The finished call record is saved by the orchestrator through memory.save_call.
 """
 import asyncio
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from livekit import api as lk_api
 
 from common.contracts import CallBrief, CallEvent
 from common.masking import mask_phone, mask_text
@@ -38,6 +40,7 @@ class CallState:
     poll_id: str | None = None                   # id of the poll sent for `question`
     answer: str | None = None                    # None + answer_ready set = "no answer coming"
     answer_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    status_updates: int = 0                      # edits this call made to the user's status bubble
 
 
 _calls: dict[str, CallState] = {}
@@ -57,12 +60,21 @@ class CallDispatcher(Protocol):
 
 
 class LiveKitDispatcher:
-    """TODO(D): LiveKit agent dispatch to agent_name=CALL_AGENT_NAME, room=call_id,
-    metadata=brief JSON. The call agent creates the SIP participant itself.
-    Check https://docs.livekit.io/agents/server/agent-dispatch/ before writing it."""
+    """Explicit agent dispatch (https://docs.livekit.io/agents/server/agent-dispatch/): the CallBrief
+    JSON as job metadata, one new room per call (the dispatch creates it). The call agent registered
+    as CALL_AGENT_NAME picks the job up and dials the SIP participant itself.
+    LiveKitAPI reads LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET from the environment."""
+
+    TIMEOUT_S = 15
 
     async def dispatch(self, brief: CallBrief) -> None:
-        raise NotImplementedError
+        room = f"call-{brief.call_id}"
+        start = time.monotonic()
+        async with lk_api.LiveKitAPI() as lk:
+            dispatch = await asyncio.wait_for(lk.agent_dispatch.create_dispatch(lk_api.CreateAgentDispatchRequest(
+                agent_name=settings.CALL_AGENT_NAME, room=room, metadata=brief.model_dump_json())), self.TIMEOUT_S)
+        log.info("dispatched call %s to agent %s in room %s (dispatch %s, %.0f ms)", brief.call_id,
+                 settings.CALL_AGENT_NAME, room, dispatch.id, (time.monotonic() - start) * 1000)
 
 
 class FakeDispatcher:
@@ -196,15 +208,40 @@ def apply_event(event: CallEvent) -> None:
         state.question = None
 
 
+# Linq allows 5 edits per status bubble. The orchestrator opens it (a send, not an edit) and writes
+# the closing line (1 edit), so a call may make 4. Progress events get at most 2 of those, so the
+# mid-call questions always find room.
+STATUS_BUDGET = 4
+PROGRESS_STATUS_LIMIT = 2
+
+
+async def _status(state: CallState, text: str) -> None:
+    """Best effort edit of the user's status bubble. Never raises: the business is on the line."""
+    if state.status_updates >= STATUS_BUDGET:
+        log.info("status budget used up for call %s, skipped %r", state.brief.call_id, mask_text(text)[:60])
+        return
+    state.status_updates += 1
+    try:
+        await gateway.set_status(state.brief.user_id, text[:100])
+    except Exception as e:
+        log.warning("status update for call %s failed: %s", state.brief.call_id, e)
+
+
 async def after_event(event: CallEvent) -> None:
-    """Slow side effects of an event (polls, LLM summary). Runs after the HTTP reply."""
+    """Slow side effects of an event (status bubble, polls, LLM summary). Runs after the HTTP reply."""
     state = _calls[event.call_id]
     user = state.brief.user_id
-    if event.type == "question":
+    if event.type == "started":
+        await _status(state, "On the phone with them")
+    elif event.type == "progress":
+        if state.status_updates < PROGRESS_STATUS_LIMIT:
+            await _status(state, event.text)
+    elif event.type == "question":
         try:
             poll_id = await gateway.send_poll(user, f"On the call: {event.text}", event.options or ["Yes", "No"])
             if state.question is event:  # a newer question may have replaced this one meanwhile
                 state.poll_id = poll_id
+            await _status(state, f"On hold: {event.text}")  # after the poll: the business is waiting
         except Exception:
             log.exception("poll for call %s failed, giving up on the question", event.call_id)
             if state.question is event:
