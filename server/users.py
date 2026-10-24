@@ -100,12 +100,13 @@ async def init() -> None:
 
 async def login(phone: str) -> dict:
     """Create or touch the user. Returns the row plus "new": True on signup.
-    Falls back to an in-memory row if the database is down, so login still works."""
+    If the database is down, login still works but counts as an existing, activated user:
+    better to miss a welcome (it goes out on a later login) than to resend it every login."""
     try:
         return await asyncio.wait_for(store.login(phone), DB_TIMEOUT_S)
     except Exception:
-        log.exception("user lookup failed for %s, treating as new", mask_phone(phone))
-        return {"phone": phone, "activated_at": None, "new": True}
+        log.exception("user lookup failed for %s, skipping signup and welcome this time", mask_phone(phone))
+        return {"phone": phone, "activated_at": "unknown", "new": False}
 
 
 async def activate(phone: str) -> bool:

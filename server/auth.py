@@ -59,9 +59,10 @@ class FakeSmsSender:
 
 
 class TwilioError(Exception):
-    def __init__(self, msg: str, transient: bool = False) -> None:
+    def __init__(self, msg: str, transient: bool = False, maybe_sent: bool = False) -> None:
         super().__init__(msg)
-        self.transient = transient  # worth retrying: network error, 429 or 5xx
+        self.transient = transient    # Twilio surely did not take the message: safe to retry
+        self.maybe_sent = maybe_sent  # the reply got lost, Twilio may have sent it: never retry
 
 
 class TwilioSmsSender:
@@ -83,8 +84,11 @@ class TwilioSmsSender:
             data["From"] = settings.TWILIO_SMS_FROM
         try:
             r = await self._http.post(self._url, data=data)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            raise TwilioError(f"could not reach Twilio: {exc}", transient=True) from exc
         except httpx.HTTPError as exc:
-            raise TwilioError(f"request failed: {exc}", transient=True) from exc
+            # Sent, but no (full) reply, e.g. a read timeout: a retry could text the user twice.
+            raise TwilioError(f"no reply from Twilio: {exc}", maybe_sent=True) from exc
         if r.status_code >= 400:
             # Twilio errors look like {"code": 21211, "message": "..."}; the message may hold the number.
             try:
@@ -163,7 +167,8 @@ def sender() -> SmsSender:
 
 
 async def send_with_retry(to: str, body: str) -> None:
-    """Send, retrying transient failures. Errors like an invalid number fail at once."""
+    """Send, retrying only failures where Twilio surely did not take the message (no connection,
+    429, 5xx). Errors like an invalid number, or a lost reply, are raised at once."""
     for attempt in range(len(SEND_RETRY_DELAYS_S) + 1):
         try:
             await sender().send_sms(to, body)
@@ -180,6 +185,7 @@ async def send_with_retry(to: str, body: str) -> None:
 
 _codes: dict[str, dict] = {}        # phone -> {"hash", "expires", "attempts", "next_send_at"}
 _sends: dict[str, list[float]] = {}  # phone -> send times in the last hour
+_sending: set[str] = set()           # phones with a send in flight (sends with retries take seconds)
 
 
 def _hash(phone: str, code: str) -> str:
@@ -265,12 +271,29 @@ async def request_code(req: OtpRequest) -> dict:
     if len(recent) >= MAX_SENDS_PER_PHONE_PER_HOUR:
         raise _too_soon(recent[0] + 3600 - now, "Too many codes for this number, try again in {wait} s")
 
-    code = f"{secrets.randbelow(1_000_000):06d}"
+    # One send per number at a time: the checks above and the writes below are seconds apart.
+    if phone in _sending:
+        raise _too_soon(5, "A code is on its way, wait {wait} s before asking again")
+    _sending.add(phone)
     try:
-        await send_with_retry(phone, sms_body(code))
-    except Exception:
-        log.exception("could not send login code to %s", mask_phone(phone))
-        raise HTTPException(502, "Could not send the code, try again in a moment")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        try:
+            await send_with_retry(phone, sms_body(code))
+        except TwilioError as exc:
+            if not exc.maybe_sent:
+                log.error("could not send login code to %s: %s", mask_phone(phone), exc)
+                raise HTTPException(502, "Could not send the code, try again in a moment")
+            # The SMS may be on its way: keep its code valid and treat it as sent.
+            log.warning("login code to %s may have been sent (%s), keeping it valid", mask_phone(phone), exc)
+        except Exception:
+            log.exception("could not send login code to %s", mask_phone(phone))
+            raise HTTPException(502, "Could not send the code, try again in a moment")
+        return _code_sent(phone, code, now, recent)
+    finally:
+        _sending.discard(phone)
+
+
+def _code_sent(phone: str, code: str, now: float, recent: list[float]) -> dict:
     # A failed send starts no cooldown; a successful one waits longer each time this hour.
     cooldown = RESEND_COOLDOWNS_S[min(len(recent), len(RESEND_COOLDOWNS_S) - 1)]
     _codes[phone] = {"hash": _hash(phone, code), "expires": now + CODE_TTL_S, "attempts": 0,
