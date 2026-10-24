@@ -57,12 +57,23 @@ class CallDispatcher(Protocol):
 
 
 class LiveKitDispatcher:
-    """TODO(D): LiveKit agent dispatch to agent_name=CALL_AGENT_NAME, room=call_id,
-    metadata=brief JSON. The call agent creates the SIP participant itself.
-    Check https://docs.livekit.io/agents/server/agent-dispatch/ before writing it."""
+    """Explicit agent dispatch: a new room per call, the brief as job metadata.
+    The call agent (call_agent/agent.py, agent_name=CALL_AGENT_NAME) dials the SIP participant itself
+    and posts CallEvents back to SERVER_PUBLIC_URL. Reads LIVEKIT_URL, LIVEKIT_API_KEY and
+    LIVEKIT_API_SECRET from the environment. Docs: https://docs.livekit.io/agents/server/agent-dispatch/"""
 
     async def dispatch(self, brief: CallBrief) -> None:
-        raise NotImplementedError
+        from livekit import api  # livekit-api; imported here so fake mode never needs it
+
+        async with api.LiveKitAPI() as lk:
+            dispatch = await lk.agent_dispatch.create_dispatch(
+                api.CreateAgentDispatchRequest(
+                    agent_name=settings.CALL_AGENT_NAME,
+                    room=f"call-{brief.call_id}",
+                    metadata=brief.model_dump_json(),
+                )
+            )
+        log.info("dispatched call %s to agent %s (dispatch %s)", brief.call_id, settings.CALL_AGENT_NAME, dispatch.id)
 
 
 class FakeDispatcher:
