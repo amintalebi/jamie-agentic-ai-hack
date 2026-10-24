@@ -12,23 +12,17 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from common.masking import mask_phone
-from server import history
+from server import auth, history
 
 log = logging.getLogger("server.dashboard")
 router = APIRouter(prefix="/api/dashboard")
 
 WEB_DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
-
-
-def _norm_user(user: str) -> str:
-    """Light E.164-ish normalisation; the PWA sends back the number it was logged in with."""
-    digits = "".join(ch for ch in user if ch.isdigit() or ch == "+")
-    return digits.strip()
 
 
 # --- OpenUI Lang builder -------------------------------------------------------
@@ -161,16 +155,15 @@ def call_screen(call: dict) -> tuple[str, bool]:
 # --- routes --------------------------------------------------------------------
 
 @router.get("/calls")
-async def calls_view(user: str = "", limit: int = 50) -> dict:
-    user = _norm_user(user)
+async def calls_view(limit: int = 50, user: str = Depends(auth.current_user)) -> dict:
     calls = await history.list_calls(user, min(max(limit, 1), 200))
     ui, live = calls_screen(calls, await history.stats(user, history.recent_cutoff()))
     return {"ui": ui, "live": live}
 
 
 @router.get("/calls/{call_id}")
-async def call_view(call_id: str, user: str = "") -> dict:
-    call = await history.get_call(call_id, _norm_user(user))
+async def call_view(call_id: str, user: str = Depends(auth.current_user)) -> dict:
+    call = await history.get_call(call_id, user)
     if call is None:
         raise HTTPException(404, "unknown call")
     ui, live = call_screen(call)

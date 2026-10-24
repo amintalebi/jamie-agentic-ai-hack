@@ -153,3 +153,6 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .logout { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; }
 .logout:hover { color: var(--text); }
 .error { color: var(--bad); }
+.phone .error { margin: 0; font-size: 14px; }
+.phone .row { display: flex; justify-content: space-between; gap: 8px; }
+.phone button.link { background: transparent; color: var(--accent); font-weight: 500; padding: 6px 0; }

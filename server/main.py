@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 
-from server import calls, dashboard, db, gateway, history, settings
+from server import auth, calls, dashboard, db, gateway, history, settings
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("server")
@@ -17,7 +17,8 @@ log = logging.getLogger("server")
 async def lifespan(app: FastAPI):
     await db.open_pool()
     await history.init()
-    log.info("modes: messenger=%s stt=%s calls=%s", settings.MESSENGER_MODE, settings.STT_MODE, settings.CALLS_MODE)
+    log.info("modes: messenger=%s stt=%s calls=%s sms=%s", settings.MESSENGER_MODE, settings.STT_MODE,
+             settings.CALLS_MODE, settings.SMS_MODE)
     yield
     await history.flush()
     await db.close_pool()
@@ -27,6 +28,7 @@ app = FastAPI(title="Jamie server", lifespan=lifespan)
 app.include_router(gateway.router)
 app.include_router(calls.router)
 app.include_router(dashboard.router)
+app.include_router(auth.router)
 if settings.MESSENGER_MODE == "fake":
     app.include_router(gateway.dev_router)
 dashboard.mount_app(app)  # the PWA at /app/, if web/dist is built

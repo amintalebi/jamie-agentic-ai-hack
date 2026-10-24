@@ -15,6 +15,12 @@ def env(name: str, default: str = "") -> str:
 MESSENGER_MODE = env("MESSENGER_MODE", "fake")   # fake | linq
 STT_MODE = env("STT_MODE", "fake")               # fake | scribe
 CALLS_MODE = env("CALLS_MODE", "fake")           # fake | livekit
+SMS_MODE = env("SMS_MODE", "fake")               # fake | twilio (dashboard login codes)
+TWILIO_ACCOUNT_SID = env("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN")
+TWILIO_SMS_FROM = env("TWILIO_SMS_FROM") or env("TWILIO_NUMBER")  # must be SMS-capable
+TWILIO_MESSAGING_SERVICE_SID = env("TWILIO_MESSAGING_SERVICE_SID")  # optional, wins over TWILIO_SMS_FROM
+AUTH_SECRET = env("AUTH_SECRET")                 # signs dashboard sessions; empty = random per restart
 DATABASE_URL = env("DATABASE_URL")               # empty = no database (fakes only)
 CALL_AGENT_NAME = env("CALL_AGENT_NAME", "jamie-call-agent")
 LINQ_API_KEY = env("LINQ_API_KEY")

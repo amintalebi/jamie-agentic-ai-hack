@@ -1,6 +1,9 @@
 import { Renderer } from "@openuidev/react-lang";
 import { useEffect, useState } from "react";
-import { clearPhone, fetchScreen, getPhone, normalisePhone, setPhone, type Screen } from "./api";
+import {
+  AuthError, clearPhone, fetchScreen, getPhone, getToken, normalisePhone, requestCode, setPhone, setToken,
+  verifyCode, type Screen,
+} from "./api";
 import { library } from "./library";
 
 const LIVE_POLL_MS = 2000;
@@ -25,20 +28,23 @@ function apiPath(hash: string): string {
 type State =
   | { kind: "loading" }
   | { kind: "ok"; screen: Screen; at: Date; stale: boolean }
-  | { kind: "auth" }
   | { kind: "error"; message: string };
 
 export function App() {
   const hash = useHashRoute();
   const path = apiPath(hash);
   const [state, setState] = useState<State>({ kind: "loading" });
-  const [loginTick, setLoginTick] = useState(0);
-  const [phone, setPhoneState] = useState(getPhone);
+  const [token, setTokenState] = useState(getToken);
+  const loggedIn = Boolean(token);
 
-  // No token, no OTP, no JWT: a phone number is all the login we need (hackathon demo).
-  const loggedIn = Boolean(normalisePhone(phone));
+  function logout() {
+    setToken("");
+    clearPhone();
+    setTokenState("");
+  }
 
   useEffect(() => {
+    if (!token) return;
     let timer: number | undefined;
     let ctrl: AbortController | undefined;
     let stopped = false;
@@ -49,12 +55,16 @@ export function App() {
       ctrl = new AbortController();
       let live = false;
       try {
-        const screen = await fetchScreen(path, phone, ctrl.signal);
+        const screen = await fetchScreen(path, ctrl.signal);
         live = screen.live;
         setState({ kind: "ok", screen, at: new Date(), stale: false });
       } catch (e) {
         inFlight = false;
         if (stopped || (e as Error).name === "AbortError") return;
+        if (e instanceof AuthError) {
+          logout();
+          return;
+        }
         setState((s) => (s.kind === "ok" ? { ...s, stale: true } : { kind: "error", message: String(e) }));
       }
       inFlight = false;
@@ -76,7 +86,7 @@ export function App() {
       ctrl?.abort();
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [path, phone, loginTick]);
+  }, [path, token]);
 
   return (
     <div className="shell">
@@ -91,12 +101,12 @@ export function App() {
           </span>
         )}
         {loggedIn && (
-          <button type="button" className="logout" onClick={() => { clearPhone(); setPhoneState(""); }}>
+          <button type="button" className="logout" onClick={logout}>
             Sign out
           </button>
         )}
       </header>
-      {!loggedIn && <PhoneForm onSaved={(p) => { setPhone(p); setPhoneState(p); setLoginTick((t) => t + 1); }} />}
+      {!loggedIn && <LoginForm onLoggedIn={(t) => { setToken(t); setTokenState(t); }} />}
       {loggedIn && (
         <>
           {state.kind === "loading" && <div className="page muted">Loading…</div>}
@@ -115,33 +125,92 @@ export function App() {
   );
 }
 
-function PhoneForm({ onSaved }: { onSaved: (phone: string) => void }) {
-  const [value, setValue] = useState("");
+/** Two steps: phone number, then the 6-digit code Twilio texts to it. */
+function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
+  const [value, setValue] = useState(getPhone);
+  const [phone, setPhoneSent] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function run(action: () => Promise<void>) {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const sendCode = (p: string) =>
+    run(async () => {
+      await requestCode(p);
+      setPhone(p);
+      setPhoneSent(p);
+      setCode("");
+    });
+
+  if (!phone) {
+    return (
+      <form
+        className="page card phone"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const p = normalisePhone(value);
+          if (p) sendCode(p);
+        }}
+      >
+        <h2>Your phone number</h2>
+        <p className="muted">Log in with the number you text Jamie from. We will text you a code.</p>
+        <input
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          placeholder="+49 151 0000 1234"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          autoFocus
+          aria-label="Phone number"
+        />
+        {error && <p className="error">{error}</p>}
+        <button type="submit" disabled={busy || !normalisePhone(value)}>{busy ? "Sending…" : "Text me a code"}</button>
+      </form>
+    );
+  }
+
   return (
     <form
       className="page card phone"
       onSubmit={(e) => {
         e.preventDefault();
-        const p = normalisePhone(value);
-        if (p) {
-          setPhone(p);
-          onSaved(p);
-        }
+        run(async () => onLoggedIn(await verifyCode(phone, code)));
       }}
     >
-      <h2>Your phone number</h2>
-      <p className="muted">Log in with the number you text Jamie from. No password, straight in.</p>
+      <h2>Enter the code</h2>
+      <p className="muted">We texted a 6-digit code to {phone}.</p>
       <input
-        type="tel"
-        inputMode="tel"
-        autoComplete="tel"
-        placeholder="+49 151 0000 1234"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
+        type="text"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        pattern="[0-9]*"
+        maxLength={6}
+        placeholder="123456"
+        value={code}
+        onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
         autoFocus
-        aria-label="Phone number"
+        aria-label="Login code"
       />
-      <button type="submit" disabled={!normalisePhone(value)}>See my calls</button>
+      {error && <p className="error">{error}</p>}
+      <button type="submit" disabled={busy || code.length !== 6}>{busy ? "Checking…" : "Log in"}</button>
+      <div className="row">
+        <button type="button" className="link" disabled={busy} onClick={() => sendCode(phone)}>Send a new code</button>
+        <button type="button" className="link" disabled={busy} onClick={() => { setPhoneSent(""); setError(""); }}>
+          Change number
+        </button>
+      </div>
     </form>
   );
 }
